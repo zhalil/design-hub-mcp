@@ -1,5 +1,5 @@
 // Design Hub canvas: infinite pan/zoom mat with live design frames laid out as iteration trees.
-import { computeLayout } from './layout.js';
+import { computeLayout, edgeGeometry } from './layout.js';
 import { createHistory } from './history.js';
 import { createMinimap } from './minimap.js';
 
@@ -12,7 +12,7 @@ import { createMinimap } from './minimap.js';
 
   const $ = (s) => document.querySelector(s);
   const mat = $('#mat'); const world = $('#world'); const links = $('#links');
-  const tools = $('#frame-tools'); const promptEl = $('#prompt');
+  const tools = $('#frame-tools'); const promptEl = $('#prompt'); const labelsEl = $('#edge-labels');
 
   let project = null;
   let view = { x: 120, y: 160, s: 0.3 };
@@ -29,10 +29,16 @@ import { createMinimap } from './minimap.js';
   const fullHeight = loadPref('fullHeight', {});
   let firstLoad = true;
   let knownNodes = new Set();
+  let edgeSel = null;           // selected nav edge id (never together with a frame/note selection)
+  let linkDrag = null;          // { from, x, y } while dragging a link handle, in world coords
+  let editingEdge = null;       // edge id whose label is being edited inline
+  let dragPos = null;           // { id, pos } while a frame is dragged: refresh() must not snap it back
 
   function loadPref(k, d) { try { return JSON.parse(localStorage.getItem(`dh:${slug}:${k}`)) ?? d; } catch { return d; } }
   function savePref(k, v) { try { localStorage.setItem(`dh:${slug}:${k}`, JSON.stringify(v)); } catch { /* storage unavailable */ } }
   let mode = loadPref('mode', 'edit') === 'view' ? 'view' : 'edit';
+  let linksFilter = loadPref('links', 'all');  // which connections to draw: 'all' | 'nav' | 'none'
+  if (!['all', 'nav', 'none'].includes(linksFilter)) linksFilter = 'all';
   // View mode blocks changes to the canvas; returns true when the change may go ahead.
   function canEdit() {
     if (mode === 'edit') return true;
@@ -53,6 +59,9 @@ import { createMinimap } from './minimap.js';
 
   async function refresh() {
     try { project = await api(''); } catch (e) { showToast(e.message); return; }
+    const dragged = dragPos?.pos && project.nodes.find((n) => n.id === dragPos.id);
+    if (dragged) dragged.pos = dragPos.pos;
+    if (edgeSel && !project.edges.some((e) => e.id === edgeSel)) edgeSel = null;
     document.title = `${project.name} · Design Hub`;
     $('#project-name').textContent = project.name;
     $('#design-system').textContent = project.designSystem ? `Design system: ${project.designSystem.title || project.designSystem.id}` : 'No design system yet';
@@ -118,15 +127,36 @@ import { createMinimap } from './minimap.js';
   }
 
   function drawLinks(nodes) {
-    const parts = [];
-    for (const n of nodes) {
-      if (!n.parent || !positions[n.parent] || !positions[n.id]) continue;
-      const a = positions[n.parent]; const b = positions[n.id];
-      const x1 = a.x + a.w / 2; const y1 = a.y + a.h; const x2 = b.x + b.w / 2; const y2 = b.y - 40 / view.s;
-      const my = (y1 + y2) / 2;
-      parts.push(`<path d="M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}"/><circle cx="${x1}" cy="${y1}" r="${4 / view.s}"/><circle cx="${x2}" cy="${y2}" r="${4 / view.s}"/>`);
+    const s = view.s;
+    const parts = [`<defs><marker id="arrow" markerUnits="userSpaceOnUse" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="${12 / s}" markerHeight="${12 / s}" orient="auto"><path d="M0,0L10,5L0,10z"/></marker></defs>`];
+    if (linksFilter === 'all') {
+      for (const n of nodes) {
+        if (!n.parent || !positions[n.parent] || !positions[n.id]) continue;
+        const a = positions[n.parent]; const b = positions[n.id];
+        const x1 = a.x + a.w / 2; const y1 = a.y + a.h; const x2 = b.x + b.w / 2; const y2 = b.y - 40 / s;
+        const my = (y1 + y2) / 2;
+        parts.push(`<path class="lineage" d="M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}"/><circle cx="${x1}" cy="${y1}" r="${4 / s}"/><circle cx="${x2}" cy="${y2}" r="${4 / s}"/>`);
+      }
+    }
+    const pills = [];
+    const nav = linksFilter === 'none' ? [] : (project?.edges || []).filter((e) => e.kind === 'nav' && positions[e.from] && positions[e.to]);
+    for (const e of nav) {
+      const g = edgeGeometry(positions[e.from], positions[e.to]);
+      parts.push(`<path class="nav${e.id === edgeSel ? ' selected' : ''}" data-id="${e.id}" d="${g.d}" marker-end="url(#arrow)"/><path class="edge-hit" data-id="${e.id}" d="${g.d}"/>`);
+      if (e.label) pills.push({ e, g });
+    }
+    if (linkDrag && positions[linkDrag.from]) {
+      parts.push(`<path class="temp" d="${edgeGeometry(positions[linkDrag.from], { x: linkDrag.x, y: linkDrag.y, w: 0, h: 0 }).d}" marker-end="url(#arrow)"/>`);
     }
     links.innerHTML = parts.join('');
+    if (editingEdge) return; // leave the inline label editor alone
+    labelsEl.replaceChildren(...pills.map(({ e, g }) => {
+      const el = document.createElement('span');
+      el.className = `edge-label${e.id === edgeSel ? ' selected' : ''}`;
+      el.dataset.id = e.id; el.textContent = e.label;
+      el.style.left = `${g.lx}px`; el.style.top = `${g.ly}px`;
+      return el;
+    }));
   }
 
   function createFrame(n) {
@@ -134,7 +164,7 @@ import { createMinimap } from './minimap.js';
     el.className = 'frame';
     el.dataset.id = n.id;
     el.innerHTML = `<div class="frame-label"><span class="name"></span><span class="meta"></span><span class="chosen" hidden></span><span class="working" hidden>Claude is working…</span></div>
-      <div class="frame-body"><iframe title="" loading="lazy" sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads"></iframe><div class="shield"></div></div>`;
+      <div class="frame-body"><iframe title="" loading="lazy" sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads"></iframe><div class="shield"></div></div><div class="link-handle" title="Drag onto another design to link them"></div>`;
     const f = { el, iframe: el.querySelector('iframe'), name: el.querySelector('.name'), meta: el.querySelector('.meta'), chosen: el.querySelector('.chosen'), work: el.querySelector('.working'), src: '' };
     f.iframe.title = n.label;
     const shield = el.querySelector('.shield');
@@ -142,6 +172,7 @@ import { createMinimap } from './minimap.js';
     shield.addEventListener('dblclick', () => setInteract(n.id));
     el.querySelector('.frame-label').addEventListener('pointerdown', (e) => startFrameDrag(e, n.id));
     el.querySelector('.frame-label').addEventListener('dblclick', () => renameNode(n.id));
+    el.querySelector('.link-handle').addEventListener('pointerdown', (e) => startLinkDrag(e, n.id));
     return f;
   }
 
@@ -281,23 +312,51 @@ import { createMinimap } from './minimap.js';
     if (mode !== 'edit') { startPan(e); return; }
     const p = positions[id];
     const start = { x: e.clientX, y: e.clientY, px: p.x, py: p.y };
+    const drag = { id, pos: null };
+    dragPos = drag;
     let moved = false;
     const move = (ev) => {
       const dx = (ev.clientX - start.x) / view.s; const dy = (ev.clientY - start.y) / view.s;
       if (Math.abs(dx) + Math.abs(dy) > 4 / view.s) moved = true;
       const n = project.nodes.find((x) => x.id === id);
-      n.pos = { x: Math.round(start.px + dx), y: Math.round(start.py + dy) };
+      n.pos = drag.pos = { x: Math.round(start.px + dx), y: Math.round(start.py + dy) };
       layoutAndRender();
     };
     const up = () => {
       removeEventListener('pointermove', move); removeEventListener('pointerup', up);
       const n = project.nodes.find((x) => x.id === id);
-      if (moved && n?.pos) api(`/nodes/${id}`, { method: 'PATCH', body: n.pos }).catch((er) => showToast(er.message));
+      const done = () => { if (dragPos === drag) dragPos = null; };
+      if (moved && n?.pos) api(`/nodes/${id}`, { method: 'PATCH', body: n.pos }).catch((er) => showToast(er.message)).finally(done);
+      else done();
+    };
+    addEventListener('pointermove', move); addEventListener('pointerup', up);
+  }
+
+  // Drag from a frame's link handle; dropping on another frame links the two.
+  function startLinkDrag(e, from) {
+    if (e.button !== 0 || mode !== 'edit') return;
+    e.stopPropagation(); e.preventDefault();
+    const at = (ev) => ({ x: (ev.clientX - view.x) / view.s, y: (ev.clientY - view.y) / view.s });
+    linkDrag = { from, ...at(e) };
+    const move = (ev) => { Object.assign(linkDrag, at(ev)); drawLinks(project.nodes); };
+    const up = (ev) => {
+      removeEventListener('pointermove', move); removeEventListener('pointerup', up);
+      const { x, y } = at(ev);
+      linkDrag = null; drawLinks(project.nodes);
+      const to = Object.keys(positions).find((id) => { const r = positions[id]; return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h; });
+      if (to && to !== from) linkFrames(from, to);
     };
     addEventListener('pointermove', move); addEventListener('pointerup', up);
   }
 
   $('#fit-btn').onclick = fitAll;
+  const filterEl = $('#links-filter');
+  filterEl.value = linksFilter;
+  filterEl.onchange = () => {
+    linksFilter = filterEl.value; savePref('links', linksFilter); filterEl.blur();
+    edgeSel = null; // a hidden edge must not stay deletable
+    if (project) drawLinks(project.nodes);
+  };
   const presets = $('#zoom-presets');
   const showPresets = (on) => { presets.hidden = !on; $('#zoom-menu').setAttribute('aria-expanded', String(on)); };
   $('#zoom-menu').onclick = () => showPresets(presets.hidden);
@@ -320,6 +379,7 @@ import { createMinimap } from './minimap.js';
     mode = m; savePref('mode', m);
     document.body.dataset.mode = m;
     for (const b of $('#mode').children) b.setAttribute('aria-checked', String(b.dataset.mode === m));
+    placeTools(); // Link is Edit-only
   }
   for (const b of $('#mode').children) b.onclick = () => setMode(b.dataset.mode);
   setMode(mode);
@@ -377,6 +437,7 @@ import { createMinimap } from './minimap.js';
 
   // ---------------- selection & modes ----------------
   function select(id) {
+    if (edgeSel) markEdge(null);
     if (selection.size === (id ? 1 : 0) && (!id || selection.has(id))) return;
     selection.clear();
     if (id) selection.add(id);
@@ -429,12 +490,16 @@ import { createMinimap } from './minimap.js';
     }
   });
 
+  // the two selected frames, in selection order, when exactly two frames are selected
+  function pair() { const ids = [...selection]; return ids.length === 2 && ids.every((x) => positions[x]) ? ids : null; }
   function placeTools() {
-    const id = primary();
+    const two = mode === 'edit' && pair();
+    const id = primary() || (two && two[0]);
     const p = id && positions[id];
     const n = id && project?.nodes.find((x) => x.id === id);
     if (!p || !n) { tools.hidden = true; return; }
     tools.hidden = false;
+    tools.classList.toggle('pair', Boolean(two));
     const x = p.x * view.s + view.x;
     const yTop = p.y * view.s + view.y - 30; // just above the frame label
     const narrow = innerWidth < 720;
@@ -451,6 +516,7 @@ import { createMinimap } from './minimap.js';
   tools.addEventListener('click', async (e) => {
     const b = e.target.closest('button,a');
     const id = primary();
+    if (b?.dataset.act === 'link') { const two = pair(); if (two) linkFrames(two[0], two[1]); return; }
     if (!b || !id) return;
     if (b.dataset.vp) {
       const n = project.nodes.find((x) => x.id === id); n.viewport = b.dataset.vp;
@@ -477,6 +543,86 @@ import { createMinimap } from './minimap.js';
     const n = project.nodes.find((x) => x.id === id);
     const label = prompt('Rename design', n.label);
     if (label && label !== n.label) await api(`/nodes/${id}`, { method: 'PATCH', body: { label } }).catch((e) => showToast(e.message));
+  }
+
+  // ---------------- nav edges ----------------
+  // History steps find an edge by its ends, not its id: undo/redo re-create it under a new id.
+  function edgeId(from, to) {
+    const e = project.edges.find((x) => x.from === from && x.to === to);
+    if (!e) throw new Error('That link no longer exists');
+    return e.id;
+  }
+  const edgeCall = async (path, opts) => { await api(path, opts); await refresh(); };
+  const addEdge = (from, to, label = '') => edgeCall('/edges', { method: 'POST', body: { from, to, label } });
+  const removeEdge = (from, to) => edgeCall(`/edges/${edgeId(from, to)}`, { method: 'DELETE' });
+  const labelEdge = (from, to, label) => edgeCall(`/edges/${edgeId(from, to)}`, { method: 'PATCH', body: { label } });
+  async function edgeAction(run, step) {
+    try { await run(); history.push(step); } catch (e) { showToast(e.message); }
+  }
+
+  function linkFrames(from, to) {
+    if (from === to || !canEdit()) return;
+    edgeAction(() => addEdge(from, to), { label: 'Link', undo: () => removeEdge(from, to), redo: () => addEdge(from, to) });
+  }
+
+  function deleteEdge(id) {
+    const e = project.edges.find((x) => x.id === id);
+    if (!e || !canEdit()) return;
+    const { from, to, label } = e;
+    edgeAction(() => removeEdge(from, to), { label: 'Delete link', undo: () => addEdge(from, to, label), redo: () => removeEdge(from, to) });
+  }
+
+  // Highlight by class, not a redraw: replacing the clicked element would swallow its dblclick.
+  function markEdge(id) {
+    edgeSel = id;
+    for (const el of document.querySelectorAll('#links .nav, #edge-labels span')) el.classList.toggle('selected', el.dataset.id === id);
+  }
+  function selectEdge(id) {
+    select(null);
+    markEdge(id);
+  }
+
+  function editEdgeLabel(id) {
+    const e = project.edges.find((x) => x.id === id);
+    if (!e || !positions[e.from] || !positions[e.to] || !canEdit()) return;
+    selectEdge(id);
+    const { from, to, label: old } = e;
+    const g = edgeGeometry(positions[from], positions[to]);
+    const input = document.createElement('input');
+    input.className = 'edge-label';
+    input.value = old;
+    input.placeholder = 'Label';
+    input.setAttribute('aria-label', 'Link label');
+    Object.assign(input.style, { left: `${g.lx}px`, top: `${g.ly}px` });
+    editingEdge = id;
+    labelsEl.querySelector(`[data-id="${id}"]`)?.remove();
+    labelsEl.append(input);
+    input.focus(); input.select();
+    let cancel = false;
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') input.blur();
+      else if (ev.key === 'Escape') { cancel = true; input.blur(); }
+    });
+    input.addEventListener('blur', () => {
+      if (editingEdge !== id) return;
+      editingEdge = null; input.remove();
+      const label = input.value.trim();
+      if (cancel || label === old) { drawLinks(project.nodes); return; }
+      edgeAction(() => labelEdge(from, to, label), { label: 'Rename link', undo: () => labelEdge(from, to, old), redo: () => labelEdge(from, to, label) });
+    });
+  }
+
+  for (const layer of [links, labelsEl]) {
+    layer.addEventListener('pointerdown', (e) => {
+      const t = e.target.closest('.edge-hit, span.edge-label');
+      if (!t || e.button !== 0 || space || tool === 'hand') return;
+      e.stopPropagation();
+      selectEdge(t.dataset.id);
+    });
+    layer.addEventListener('dblclick', (e) => {
+      const t = e.target.closest('.edge-hit, span.edge-label');
+      if (t && tool === 'select') editEdgeLabel(t.dataset.id);
+    });
   }
 
   // ---------------- status ----------------
@@ -698,6 +844,7 @@ import { createMinimap } from './minimap.js';
     else if (e.key === '@' || (e.shiftKey && e.code === 'Digit2')) { if (selection.size) zoomTo([...selection]); }
     else if (e.key === '+' || e.key === '=' || e.key === '-') keyZoom(e.key);
     else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undoRedo(e.shiftKey); }
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && edgeSel) deleteEdge(edgeSel);
     else if ((e.key === 'Delete' || e.key === 'Backspace') && primary()) tools.querySelector('[data-act="delete"]').click();
     else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'd' && primary()) { e.preventDefault(); tools.querySelector('[data-act="duplicate"]').click(); }
     else if (e.metaKey || e.ctrlKey || e.altKey) { /* leave other shortcuts to the browser */ }

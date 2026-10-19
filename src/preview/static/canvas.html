@@ -10,7 +10,7 @@
 </head>
 <body>
 <div id="mat" aria-label="Design canvas">
-  <div id="world"><svg id="links" aria-hidden="true"></svg></div>
+  <div id="world"><svg id="links" aria-hidden="true"></svg><div id="edge-labels"></div></div>
   <div id="empty" hidden>
     <h2>Nothing on the canvas yet</h2>
     <p>Ask Claude to design something for this project, or open Agent and describe it.</p>
@@ -47,6 +47,9 @@
       <button>100%</button><button>150%</button><button>200%</button><button>300%</button>
     </div>
   </div>
+  <select id="links-filter" title="Show connections" aria-label="Show connections">
+    <option value="all">All links</option><option value="nav">Navigation</option><option value="none">No links</option>
+  </select>
   <div id="mode" class="seg" role="radiogroup" aria-label="Mode">
     <button data-mode="view" role="radio" title="View only: navigate and ask Claude">View</button>
     <button data-mode="edit" role="radio" title="Edit the canvas">Edit</button>
@@ -94,6 +97,7 @@
       <svg viewBox="0 0 16 16" width="14" height="14"><rect x="1.5" y="2.5" width="13" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5.5 14h5" stroke="currentColor" stroke-width="1.4"/></svg></button>
   </div>
   <span class="sep"></span>
+  <button data-act="link" title="Link the first selected design to the second">Link</button>
   <button data-act="pick" title="Select an element to change (E)">Select element</button>
   <button data-act="interact" title="Click and scroll inside the design (double-click)">Interact</button>
   <button data-act="fit-height" title="Show the full page height">Full height</button>

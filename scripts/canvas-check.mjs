@@ -144,6 +144,75 @@ try {
   }, c.id);
   assert.ok(labelFree, 'after Fit the frame toolbar does not cover the frame label');
 
+  // ---- navigation edges
+  const call = async (url, method = 'GET', body) => {
+    const r = await fetch(`${info.url}/api/p/${p.slug}${url}`, { method, headers: { 'Content-Type': 'application/json' }, body: body && JSON.stringify(body) });
+    return r.json();
+  };
+  const edges = async () => (await call('')).edges;
+  const until = async (fn, msg) => { for (let i = 0; i < 40; i++) { if (await fn()) return; await page.waitForTimeout(100); } assert.fail(msg); };
+  const navCount = () => page.$$eval('#links path.nav', (l) => l.length);
+  const b = (await call('')).nodes.find((n) => n.label === 'B');
+  const e1 = await call('/edges', 'POST', { from: a.id, to: b.id, label: 'Sign in' });
+  await until(async () => await navCount() === 1, 'an API-created edge shows as one path.nav');
+  assert.equal((await page.textContent('.edge-label')).trim(), 'Sign in', 'the label pill shows the edge label');
+  await call(`/edges/${e1.id}`, 'DELETE');
+  await until(async () => await navCount() === 0, 'a deleted edge disappears');
+
+  // drag the handle from A onto B
+  await page.keyboard.press('Escape');
+  const shield = async (id) => page.locator(`.frame[data-id="${id}"] .shield`).boundingBox();
+  const sa = await shield(a.id);
+  await page.mouse.move(sa.x + sa.width / 2, sa.y + sa.height / 2);
+  const hb = await page.locator(`.frame[data-id="${a.id}"] .link-handle`).boundingBox();
+  const sb = await shield(b.id);
+  await drag(hb.x + hb.width / 2, hb.y + hb.height / 2, sb.x + sb.width / 2 - hb.x - hb.width / 2, sb.y + sb.height / 2 - hb.y - hb.height / 2);
+  await until(async () => (await edges()).length === 1, 'dropping the handle on B creates an edge');
+  assert.deepEqual((({ from, to }) => ({ from, to }))((await edges())[0]), { from: a.id, to: b.id }, 'the edge goes A -> B');
+  await until(async () => await navCount() === 1, 'the linked edge is drawn');
+  await page.keyboard.press('Control+z');
+  await until(async () => (await edges()).length === 0, 'Ctrl+Z removes the new edge');
+  await until(async () => await navCount() === 0, 'the undone edge is no longer drawn');
+  await page.keyboard.press('Control+Shift+z');
+  await until(async () => (await edges()).length === 1, 'Ctrl+Shift+Z brings the edge back');
+  await until(async () => await navCount() === 1, 'the redone edge is drawn');
+
+  // show-connections filter
+  await page.selectOption('#links-filter', 'none');
+  assert.equal(await navCount(), 0, 'filter none: no path.nav');
+  await page.selectOption('#links-filter', 'all');
+  assert.equal(await navCount(), 1, 'filter all: the edge is back');
+
+  // double-click the edge to label it, then select it and delete it (undoable)
+  const edgeMid = await page.$eval('#links path.edge-hit', (el) => {
+    const pt = el.getPointAtLength(el.getTotalLength() / 2).matrixTransform(el.getScreenCTM());
+    return [pt.x, pt.y];
+  });
+  await page.mouse.dblclick(...edgeMid);
+  await page.fill('input.edge-label', 'Go');
+  await page.keyboard.press('Enter');
+  await until(async () => (await edges())[0]?.label === 'Go', 'the inline editor PATCHes the label');
+  await until(async () => (await page.textContent('.edge-label').catch(() => '')) === 'Go', 'the pill shows the new label');
+  await page.click('span.edge-label');
+  assert.equal(await page.$('.frame.selected'), null, 'selecting an edge clears the frame selection');
+  await page.keyboard.press('Delete');
+  await until(async () => (await edges()).length === 0, 'Delete removes the selected edge');
+  await until(async () => await navCount() === 0, 'the deleted edge is no longer drawn');
+  await page.keyboard.press('Control+z');
+  await until(async () => (await edges())[0]?.label === 'Go', 'Ctrl+Z restores the deleted edge with its label');
+
+  // an SSE refresh mid-drag does not snap the frame back
+  const note = await call('/notes', 'POST', { text: 'hi' });
+  const [lx, ly] = await label();
+  await page.mouse.move(lx, ly); await page.mouse.down();
+  await page.mouse.move(lx + 60, ly, { steps: 4 }); await page.mouse.move(lx + 120, ly + 40, { steps: 4 });
+  const during = await left();
+  await call(`/notes/${note.id}`, 'PATCH', { text: 'changed' });
+  await page.waitForTimeout(600);
+  assert.equal(await left(), during, 'an SSE refresh mid-drag keeps the frame under the pointer');
+  await page.mouse.up();
+  assert.deepEqual(errors, [], 'no script errors after the edge checks');
+
   if (process.argv[2]) {
     await page.screenshot({ path: process.argv[2] });
   }
