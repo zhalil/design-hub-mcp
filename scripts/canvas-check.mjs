@@ -17,6 +17,7 @@ const { chromium } = await import('playwright-core');
 const p = ws.createProject({ name: 'Canvas check' });
 const { node: a } = ws.writeNode(p.slug, { html: '<h1>A</h1>', label: 'A' });
 ws.writeNode(p.slug, { html: '<h1>B</h1>', label: 'B', parent: a.id });
+const { node: c } = ws.writeNode(p.slug, { html: '<h1>C</h1>', label: 'C' }); // a second root: the rightmost frame
 const info = await startPreview();
 let browser;
 for (const o of [{ channel: 'chrome' }, {}, { channel: 'msedge' }]) { try { browser = await chromium.launch(o); break; } catch { /* try the next one */ } }
@@ -128,9 +129,22 @@ try {
   assert.equal(await left(), l1, 'view mode: a label drag does not move the frame');
 
   assert.deepEqual(errors, [], 'no script errors on the page');
+  // ---- frame toolbar stays clickable with the Agent panel open (not under it or the minimap)
+  await page.click('#mode [data-mode="edit"]');
+  await page.click('#agent-btn'); await page.click('#fit-btn'); await settle();
+  await page.click(`.frame[data-id="${c.id}"] .shield`);
+  const onTop = await page.evaluate(() => {
+    const b = document.querySelector('#frame-tools').lastElementChild.getBoundingClientRect();
+    return document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2) === document.querySelector('#frame-tools').lastElementChild;
+  });
+  assert.ok(onTop, 'the last frame toolbar button is not covered by a panel');
+  const labelFree = await page.evaluate((id) => {
+    const l = document.querySelector(`.frame[data-id="${id}"] .frame-label .name`).getBoundingClientRect();
+    return document.elementFromPoint(l.x + 2, l.y + l.height / 2)?.closest('.frame-label') !== null;
+  }, c.id);
+  assert.ok(labelFree, 'after Fit the frame toolbar does not cover the frame label');
+
   if (process.argv[2]) {
-    await page.click('#mode [data-mode="edit"]');
-    await page.click('#agent-btn'); await page.click('#fit-btn'); await settle();
     await page.screenshot({ path: process.argv[2] });
   }
 } finally {

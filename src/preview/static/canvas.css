@@ -140,7 +140,7 @@ body.layers-open #lefttools { left: 284px; }
 .layer .meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .layer-note .name::before { content: "▤ "; color: var(--muted); }
 
-#frame-tools { position: fixed; z-index: 15; display: flex; align-items: center; gap: 2px; padding: 4px; white-space: nowrap; transform: translateY(-100%); }
+#frame-tools { position: fixed; z-index: 22; /* above #topright and #agent */ display: flex; align-items: center; gap: 2px; padding: 4px; white-space: nowrap; transform: translateY(-100%); }
 #frame-tools button, #frame-tools a { border: 0; background: none; padding: 6px 9px; border-radius: 6px; font-size: 13px; font-weight: 500; color: var(--ink); text-decoration: none; display: inline-flex; align-items: center; }
 #frame-tools button:hover, #frame-tools a:hover { background: var(--paper-2); }
 #frame-tools button[aria-pressed="true"] { background: var(--signal); color: var(--signal-ink); }

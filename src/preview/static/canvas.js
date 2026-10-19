@@ -9,7 +9,6 @@ import { createMinimap } from './minimap.js';
   const GAP_X = 140;
   const GAP_Y = 220;
   const MAX_FULL_H = 6000;
-  const AGENT_W = 372;          // Agent panel width plus its gap, keep in sync with canvas.css
 
   const $ = (s) => document.querySelector(s);
   const mat = $('#mat'); const world = $('#world'); const links = $('#links');
@@ -195,6 +194,8 @@ import { createMinimap } from './minimap.js';
     const t = positions[id] ? null : (project?.notes || []).find((x) => x.id === id && x.pos);
     return positions[id] || (t && { ...t.pos, w: t.size?.w || 280, h: t.size?.h || 200 });
   }
+  // left edge of the Agent panel when it is open, else the window edge
+  const rightEdge = () => ($('#agent').hidden ? innerWidth : $('#agent').getBoundingClientRect().left);
   function bbox(ids) {
     const list = ids.map(rectOf).filter(Boolean);
     if (!list.length) return null;
@@ -206,8 +207,8 @@ import { createMinimap } from './minimap.js';
     const b = bbox(ids);
     if (!b) return;
     // keep clear of the left toolbar, the Layers and Agent panels and the top bars
-    const left = $('#lefttools').getBoundingClientRect().right + 24; const right = ($('#agent').hidden ? 0 : AGENT_W) + 40;
-    const top = 90; const bottom = 40;
+    const left = $('#lefttools').getBoundingClientRect().right + 24; const right = innerWidth - rightEdge() + 40;
+    const top = 140; const bottom = 40; // top leaves room for the frame toolbar above the labels
     const W = innerWidth - left - right; const H = innerHeight - top - bottom;
     const s = Math.min(maxScale, clampS(Math.min(W / b.w, H / b.h)));
     const to = { s, x: left + (W - b.w * s) / 2 - b.x * s, y: top + (H - b.h * s) / 2 - b.y * s };
@@ -437,7 +438,7 @@ import { createMinimap } from './minimap.js';
     const x = p.x * view.s + view.x;
     const yTop = p.y * view.s + view.y - 30; // just above the frame label
     const narrow = innerWidth < 720;
-    tools.style.left = `${narrow ? 10 : Math.max($('#lefttools').getBoundingClientRect().right + 12, Math.min(x, innerWidth - tools.offsetWidth - 12))}px`;
+    tools.style.left = `${narrow ? 10 : Math.max($('#lefttools').getBoundingClientRect().right + 12, Math.min(x, rightEdge() - tools.offsetWidth - 12))}px`;
     tools.style.top = `${Math.max(tools.offsetHeight + 64, yTop)}px`;
     for (const b of tools.querySelectorAll('[data-vp]')) b.setAttribute('aria-checked', String(b.dataset.vp === n.viewport));
     tools.querySelector('[data-act="pick"]').setAttribute('aria-pressed', String(pickId === id));
