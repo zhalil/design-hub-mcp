@@ -106,7 +106,7 @@ export function writeNode(slug, { html, parent = null, node = null, label, note,
   fs.mkdirSync(path.join(projectDir(slug), 'nodes'), { recursive: true });
   fs.writeFileSync(nodeFile(slug, n), html);
   if (p.status === 'ready' && !node) p.status = 'review';
-  if (linkFrom && !p.edges.some((e) => e.from === linkFrom && e.to === n.id)) p.edges.push({ id: nextId(p, 'edge', 'e'), from: linkFrom, to: n.id, label: String(linkLabel || ''), kind: 'nav' });
+  if (linkFrom && !p.edges.some((e) => e.from === linkFrom && e.to === n.id)) p.edges.push({ id: nextId(p, 'edge', 'e'), from: linkFrom, to: n.id, label: String(linkLabel || '').slice(0, 120), kind: 'nav' });
   save(p, node ? 'node-updated' : 'node-added');
   events.emit('node', { slug, node: n.id });
   return { project: p, node: n };
@@ -163,7 +163,7 @@ export function restoreNode(slug, id) {
 export function updateNodeMeta(slug, id, patch) {
   const p = loadProject(slug);
   const n = getNode(p, id);
-  if (patch.viewport !== undefined && !VIEWPORTS[patch.viewport]) throw new Error(`viewport must be one of ${Object.keys(VIEWPORTS).join(', ')}`);
+  if (patch.viewport !== undefined && !Object.hasOwn(VIEWPORTS, patch.viewport)) throw new Error(`viewport must be one of ${Object.keys(VIEWPORTS).join(', ')}`);
   for (const k of ['label', 'viewport', 'note']) if (patch[k] !== undefined) n[k] = patch[k];
   if (patch.x === null && patch.y === null) delete n.pos;
   else if (patch.x !== undefined && patch.y !== undefined) n.pos = { x: patch.x, y: patch.y };
