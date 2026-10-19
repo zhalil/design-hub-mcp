@@ -1,0 +1,21 @@
+{
+  "name": "design-hub",
+  "description": "Design Hub — a design agent workspace for Claude Code built on OpenDesign, huashu-design and UI UX Pro Max.",
+  "owner": {
+    "name": "Design Hub"
+  },
+  "plugins": [
+    {
+      "name": "design-hub",
+      "source": "./",
+      "description": "Design systems, templates, skills and craft rules from OpenDesign, huashu-design and UI UX Pro Max, plus a Superdesign-style canvas where you iterate with Claude Code.",
+      "category": "design",
+      "tags": [
+        "design",
+        "ui",
+        "canvas",
+        "mcp"
+      ]
+    }
+  ]
+}

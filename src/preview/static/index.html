@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design Hub · Projects</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/_hub/canvas.css">
+<style>
+  html, body { overflow: auto; height: auto; min-height: 100%; }
+  body {
+    background-color: var(--mat);
+    background-image: linear-gradient(var(--mat-line-strong) 1px, transparent 1px), linear-gradient(90deg, var(--mat-line-strong) 1px, transparent 1px),
+      linear-gradient(var(--mat-line) 1px, transparent 1px), linear-gradient(90deg, var(--mat-line) 1px, transparent 1px);
+    background-size: 160px 160px, 160px 160px, 32px 32px, 32px 32px;
+  }
+  main { max-width: 1240px; margin: 0 auto; padding: 48px 24px 80px; }
+  header.page { color: #fff; margin-bottom: 28px; display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+  header.page h1 { margin: 0; font-size: 34px; letter-spacing: -.015em; font-weight: 650; }
+  header.page p { margin: 6px 0 0; color: rgba(255,255,255,.7); max-width: 60ch; }
+  .ws { color: rgba(255,255,255,.6); font-size: 13px; overflow-wrap: anywhere; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 22px; }
+  .card { display: block; text-decoration: none; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; transition: transform .12s ease; }
+  .card:hover { transform: translateY(-2px); }
+  .thumb { position: relative; aspect-ratio: 16 / 10; background: #fff; overflow: hidden; border-bottom: 1px solid var(--line); }
+  .thumb iframe { position: absolute; left: 0; top: 0; border: 0; transform-origin: 0 0; pointer-events: none; background: #fff; }
+  .thumb .none { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 13px; background: var(--paper-2); }
+  .body { padding: 12px 14px 14px; }
+  .row { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+  .name { font-weight: 600; font-size: 15.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .brief { color: var(--muted); font-size: 13px; margin: 4px 0 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .facts { color: var(--muted); font-size: 12.5px; margin-top: 8px; display: flex; gap: 12px; flex-wrap: wrap; }
+  .st { font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 99px; background: var(--paper-2); color: var(--muted); white-space: nowrap; }
+  .st.ready { background: var(--signal); color: var(--signal-ink); }
+  .st.review { background: color-mix(in oklab, var(--ok) 22%, var(--paper)); color: var(--ink); }
+  .empty { background: var(--paper); border-radius: var(--radius); padding: 28px; max-width: 640px; box-shadow: var(--shadow); }
+  .empty h2 { margin: 0 0 8px; font-size: 20px; }
+  .empty p { margin: 6px 0; color: var(--muted); }
+  code { background: var(--paper-2); padding: 1px 6px; border-radius: 4px; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <header class="page">
+    <div><h1>Design projects</h1><p>Every design Claude makes through Design Hub lands on a canvas here. Open a project to iterate on it.</p></div>
+    <div class="ws" id="ws"></div>
+  </header>
+  <div class="grid" id="grid"></div>
+</main>
+<script>
+(async () => {
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const VPW = { mobile: 390, tablet: 820, desktop: 1440 };
+  const STATUS = { draft: 'Draft', review: 'In review', ready: 'Ready' };
+  async function load() {
+    const [ping, projects] = await Promise.all([fetch('/api/ping').then((r) => r.json()), fetch('/api/projects').then((r) => r.json())]);
+    document.getElementById('ws').textContent = ping.workspace;
+    const grid = document.getElementById('grid');
+    if (!projects.length) {
+      grid.outerHTML = `<div class="empty"><h2>No projects yet</h2><p>In Claude Code, ask for a design — for example “design a pricing page for my app with design-hub”. Claude creates the project and it appears here.</p><p>You can also run <code>/design-hub:design</code> followed by what you want designed.</p></div>`;
+      return;
+    }
+    grid.innerHTML = projects.map((p) => {
+      const w = p.thumb ? VPW[p.thumb.viewport] || 1440 : 1440;
+      return `<a class="card" href="/p/${encodeURIComponent(p.slug)}">
+        <div class="thumb" data-w="${w}">${p.thumb ? `<iframe loading="lazy" tabindex="-1" sandbox="allow-scripts" src="/f/${encodeURIComponent(p.slug)}/${p.thumb.file}?r=${p.thumb.rev}" style="width:${w}px;height:${Math.round(w * 10 / 16)}px"></iframe>` : '<div class="none">No designs yet</div>'}</div>
+        <div class="body"><div class="row"><span class="name">${esc(p.name)}</span><span class="st ${p.status}">${STATUS[p.status] || p.status}</span></div>
+        ${p.brief ? `<p class="brief">${esc(p.brief)}</p>` : ''}
+        <div class="facts"><span>${p.nodes} design${p.nodes === 1 ? '' : 's'}</span>${p.pending ? `<span>${p.pending} queued request${p.pending === 1 ? '' : 's'}</span>` : ''}${p.designSystem ? `<span>${esc(p.designSystem)}</span>` : ''}<span>${new Date(p.updatedAt).toLocaleString()}</span></div></div></a>`;
+    }).join('');
+    const fit = () => document.querySelectorAll('.thumb').forEach((t) => { const f = t.querySelector('iframe'); if (f) f.style.transform = `scale(${t.clientWidth / Number(t.dataset.w)})`; });
+    fit(); addEventListener('resize', fit);
+  }
+  await load();
+  const es = new EventSource('/events');
+  let t; es.onmessage = () => { clearTimeout(t); t = setTimeout(load, 300); };
+})();
+</script>
+</body>
+</html>

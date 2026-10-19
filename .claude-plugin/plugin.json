@@ -1,0 +1,73 @@
+{
+  "name": "design-hub",
+  "displayName": "Design Hub",
+  "description": "OpenDesign + huashu-design + UI UX Pro Max in one MCP server, with a Superdesign-style live canvas. Runs only on Claude Code with your subscription — no API keys.",
+  "author": {
+    "name": "Design Hub"
+  },
+  "license": "MIT",
+  "keywords": [
+    "design",
+    "ui",
+    "canvas",
+    "design-system",
+    "opendesign",
+    "huashu-design",
+    "ui-ux-pro-max",
+    "superdesign"
+  ],
+  "mcpServers": {
+    "design-hub": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/src/server.js"
+      ],
+      "env": {
+        "DESIGN_HUB_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}",
+        "DESIGN_HUB_PORT": "${user_config.port}",
+        "DESIGN_HUB_OPEN": "${user_config.open_browser}",
+        "DESIGN_HUB_RUNNER": "${user_config.background_runs}",
+        "DESIGN_HUB_RUNNER_MODEL": "${user_config.runner_model}"
+      }
+    }
+  },
+  "userConfig": {
+    "open_browser": {
+      "type": "string",
+      "title": "Open the canvas in the browser",
+      "description": "ready: when a design is ready or waits for your choice; always: also on every new design; never: only when you open it",
+      "options": [
+        "ready",
+        "always",
+        "never"
+      ],
+      "default": "ready"
+    },
+    "background_runs": {
+      "type": "boolean",
+      "title": "Run Claude Code in the background for canvas requests",
+      "description": "When nobody is listening to the canvas, start headless Claude Code (your subscription, no API key) to handle what you send from the browser",
+      "default": true
+    },
+    "runner_model": {
+      "type": "string",
+      "title": "Model for background runs",
+      "description": "default uses the model from your Claude Code settings",
+      "options": [
+        "default",
+        "opus",
+        "sonnet",
+        "haiku"
+      ],
+      "default": "default"
+    },
+    "port": {
+      "type": "number",
+      "title": "Canvas port",
+      "description": "Local port of the canvas web server (the next free port is used if it is busy)",
+      "default": 7777,
+      "min": 1024,
+      "max": 65535
+    }
+  }
+}

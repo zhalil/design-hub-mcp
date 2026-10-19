@@ -1,0 +1,35 @@
+{
+  "name": "design-hub-mcp",
+  "version": "0.1.0",
+  "description": "One MCP server for OpenDesign, huashu-design and UI UX Pro Max with a Superdesign-style live canvas preview",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "setup": "node cli/design-hub.js setup",
+    "update": "node cli/design-hub.js update",
+    "preview": "node cli/design-hub.js serve --open"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "playwright-core": "^1.64.1",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
+  },
+  "type": "module",
+  "bin": {
+    "design-hub": "cli/design-hub.js",
+    "design-hub-mcp": "src/server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "src",
+    "cli",
+    "skills",
+    ".claude-plugin",
+    "sources.json",
+    "README.md"
+  ]
+}

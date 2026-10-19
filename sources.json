@@ -1,0 +1,55 @@
+{
+  "$comment": "Upstream repositories Design Hub pulls skills, rules, design systems and engines from. Add your own entries; 'ref' pins a tag/branch/commit. 'provides' maps catalog kinds to paths inside the repo.",
+  "sources": [
+    {
+      "id": "open-design",
+      "repo": "https://github.com/nexu-io/open-design.git",
+      "ref": "main",
+      "enabled": true,
+      "license": "Apache-2.0 (some bundled templates MIT)",
+      "sparse": ["design-systems", "design-templates", "skills", "craft"],
+      "provides": {
+        "systems": ["design-systems"],
+        "templates": ["design-templates"],
+        "skills": ["skills"],
+        "rules": ["craft"]
+      }
+    },
+    {
+      "id": "huashu-design",
+      "repo": "https://github.com/alchaincyf/huashu-design.git",
+      "ref": "master",
+      "enabled": true,
+      "license": "MIT",
+      "sparse": null,
+      "provides": {
+        "skills": ["."],
+        "references": ["references", "references/modules"],
+        "lint": "scripts/design_lint.py"
+      }
+    },
+    {
+      "id": "ui-ux-pro-max",
+      "repo": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill.git",
+      "ref": "main",
+      "enabled": true,
+      "license": "MIT",
+      "sparse": ["src", ".claude"],
+      "provides": {
+        "skills": [".claude/skills"],
+        "styleEngine": "src/ui-ux-pro-max/scripts/search.py"
+      }
+    },
+    {
+      "id": "anthropic-skills",
+      "repo": "https://github.com/anthropics/skills.git",
+      "ref": "main",
+      "enabled": false,
+      "license": "see repository",
+      "sparse": ["skills/frontend-design"],
+      "provides": {
+        "skills": ["skills"]
+      }
+    }
+  ]
+}
