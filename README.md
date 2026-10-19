@@ -39,17 +39,17 @@ claude -p (фоновый, ваша подписка) ──HTTP /mcp + токе
 - **Python 3** — для UI UX Pro Max;
 - **Chrome или Edge** — для скриншотов и линта.
 
-В сессии Claude Code (замените `<owner>` на владельца репозитория на GitHub):
+В сессии Claude Code:
 
 ```
-/plugin marketplace add <owner>/design-hub-mcp
+/plugin marketplace add zhalil/design-hub-mcp
 /plugin install design-hub@design-hub
 /reload-plugins
 ```
 
-С Claude Code 2.1.275 и новее то же самое одной командой: `/plugin install design-hub --marketplace <owner>/design-hub-mcp`.
+С Claude Code 2.1.275 и новее то же самое одной командой: `/plugin install design-hub --marketplace zhalil/design-hub-mcp`.
 
-Из терминала: `claude plugin marketplace add <owner>/design-hub-mcp`, затем `claude plugin install design-hub@design-hub`.
+Из терминала: `claude plugin marketplace add zhalil/design-hub-mcp`, затем `claude plugin install design-hub@design-hub`.
 
 Что произойдёт:
 
@@ -89,7 +89,7 @@ claude -p (фоновый, ваша подписка) ──HTTP /mcp + токе
 
 ```powershell
 cd design-hub-mcp                     # распакованный архив, в нём уже есть git-история
-git remote add origin https://github.com/<owner>/design-hub-mcp.git
+git remote add origin https://github.com/zhalil/design-hub-mcp.git
 git push -u origin main
 ```
 
