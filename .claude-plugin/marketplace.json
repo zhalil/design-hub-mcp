@@ -2,7 +2,7 @@
   "name": "design-hub",
   "description": "Design Hub — a design agent workspace for Claude Code built on OpenDesign, huashu-design and UI UX Pro Max.",
   "owner": {
-    "name": "Design Hub"
+    "name": "zhalil"
   },
   "plugins": [
     {

@@ -39,10 +39,10 @@ claude -p (фоновый, ваша подписка) ──HTTP /mcp + токе
 - **Python 3** — для UI UX Pro Max;
 - **Chrome или Edge** — для скриншотов и линта.
 
-В сессии Claude Code:
+В сессии Claude Code (можно и полной ссылкой `https://github.com/zhalil/design-hub-mcp`):
 
 ```
-/plugin marketplace add zhalil/design-hub-mcp
+/plugin marketplace add https://github.com/zhalil/design-hub-mcp
 /plugin install design-hub@design-hub
 /reload-plugins
 ```
