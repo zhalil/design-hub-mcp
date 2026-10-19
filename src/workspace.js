@@ -44,7 +44,7 @@ export function loadProject(slug) {
     const known = listProjects().map((x) => x.slug);
     throw new Error(`Project "${slug}" not found.${known.length ? ' Known: ' + known.join(', ') : ' Create one with project_create.'}`);
   }
-  p.nodes ??= []; p.requests ??= []; p.critiques ??= [];
+  p.nodes ??= []; p.requests ??= []; p.critiques ??= []; p.edges ??= []; p.notes ??= []; p.trash ??= [];
   return p;
 }
 
@@ -64,12 +64,13 @@ export function createProject({ name, brief = '', slug }) {
   }
   fs.mkdirSync(path.join(projectDir(s), 'nodes'), { recursive: true });
   const now = new Date().toISOString();
-  const p = { slug: s, name: name || s, brief, status: 'draft', createdAt: now, updatedAt: now, designSystem: null, nodes: [], requests: [], critiques: [], seq: { node: 0, request: 0, critique: 0 } };
+  const p = { slug: s, name: name || s, brief, status: 'draft', createdAt: now, updatedAt: now, designSystem: null, nodes: [], requests: [], critiques: [], edges: [], notes: [], trash: [], seq: { node: 0, request: 0, critique: 0, edge: 0, note: 0 } };
+  p.notes.push(newNote(p, { text: `Design Context\n\n${brief || 'Describe the product: who uses it, main flows, business rules.'}\n\nTokens and styles: DESIGN.md`, pinned: true, pos: { x: -420, y: 0 }, size: { w: 360, h: 280 } }));
   return save(p, 'created');
 }
 
 function nextId(p, kind, prefix) {
-  p.seq ??= { node: 0, request: 0, critique: 0 };
+  p.seq ??= { node: 0, request: 0, critique: 0, edge: 0, note: 0 };
   p.seq[kind] = (p.seq[kind] || 0) + 1;
   return `${prefix}${p.seq[kind]}`;
 }
@@ -83,8 +84,9 @@ export function getNode(p, id) {
 }
 
 /** Create a new node (optionally a child of `parent`) or overwrite an existing node in place. */
-export function writeNode(slug, { html, parent = null, node = null, label, note, viewport, origin = 'agent', requestId = null }) {
+export function writeNode(slug, { html, parent = null, node = null, label, note, viewport, origin = 'agent', requestId = null, linkFrom = null, linkLabel = '' }) {
   const p = loadProject(slug);
+  if (linkFrom) getNode(p, linkFrom);
   const now = new Date().toISOString();
   let n;
   if (node) {
@@ -105,6 +107,7 @@ export function writeNode(slug, { html, parent = null, node = null, label, note,
   if (p.status === 'ready' && !node) p.status = 'review';
   save(p, node ? 'node-updated' : 'node-added');
   events.emit('node', { slug, node: n.id });
+  if (linkFrom) addEdge(slug, { from: linkFrom, to: n.id, label: linkLabel });
   return { project: p, node: n };
 }
 
@@ -123,14 +126,37 @@ export function duplicateNode(slug, id) {
 export function deleteNode(slug, id) {
   const p = loadProject(slug);
   const n = getNode(p, id);
+  const children = p.nodes.filter((c) => c.parent === id).map((c) => c.id);
   // re-parent children to the deleted node's parent
   for (const c of p.nodes) if (c.parent === id) c.parent = n.parent;
   p.nodes = p.nodes.filter((x) => x.id !== id);
-  if (p.selected === id) p.selected = null;
+  const edges = p.edges.filter((e) => e.from === id || e.to === id);
+  p.edges = p.edges.filter((e) => !edges.includes(e));
+  const wasSelected = p.selected === id;
+  if (wasSelected) p.selected = null;
   const trash = path.join(projectDir(slug), '.trash');
   fs.mkdirSync(trash, { recursive: true });
-  try { fs.renameSync(nodeFile(slug, n), path.join(trash, `${n.id}-${Date.now()}.html`)); } catch { /* already gone */ }
+  const trashFile = `${n.id}-${Date.now()}.html`;
+  try { fs.renameSync(nodeFile(slug, n), path.join(trash, trashFile)); } catch { /* already gone */ }
+  p.trash.push({ node: n, children, edges, wasSelected, trashFile, deletedAt: new Date().toISOString() });
   return save(p, 'node-deleted');
+}
+
+export function restoreNode(slug, id) {
+  const p = loadProject(slug);
+  const i = p.trash.findLastIndex((t) => t.node.id === id);
+  if (i < 0) throw new Error(`Node "${id}" is not in the trash of project ${slug}.`);
+  const [t] = p.trash.splice(i, 1);
+  const from = path.join(projectDir(slug), '.trash', t.trashFile);
+  fs.mkdirSync(path.dirname(nodeFile(slug, t.node)), { recursive: true });
+  try { fs.renameSync(from, nodeFile(slug, t.node)); } catch { /* file already gone */ }
+  p.nodes.push(t.node);
+  for (const c of p.nodes) if (t.children.includes(c.id)) c.parent = id;
+  const has = (x) => p.nodes.some((n) => n.id === x);
+  p.edges.push(...t.edges.filter((e) => has(e.from) && has(e.to)));
+  if (t.wasSelected) p.selected = id;
+  save(p, 'node-restored');
+  return t.node;
 }
 
 export function updateNodeMeta(slug, id, patch) {
@@ -164,13 +190,13 @@ export function setDesignSystem(slug, info) {
 
 // ---------- requests (feedback queue from the browser canvas) ----------
 
-export const REQUEST_TYPES = ['iterate', 'element', 'variations', 'comment', 'pick'];
+export const REQUEST_TYPES = ['iterate', 'element', 'variations', 'comment', 'pick', 'next-page'];
 
-export function addRequest(slug, { type, nodeId = null, text = '', element = null, count = null, viewport = null }) {
+export function addRequest(slug, { type, nodeId = null, text = '', element = null, count = null, viewport = null, label = '' }) {
   if (!REQUEST_TYPES.includes(type)) throw new Error(`bad request type ${type}`);
   const p = loadProject(slug);
   if (nodeId) getNode(p, nodeId);
-  const r = { id: nextId(p, 'request', 'r'), type, nodeId, text: String(text || '').slice(0, 4000), element, count, viewport, status: 'pending', createdAt: new Date().toISOString() };
+  const r = { id: nextId(p, 'request', 'r'), type, nodeId, text: String(text || '').slice(0, 4000), element, count, viewport, label: String(label || '').slice(0, 200), status: 'pending', createdAt: new Date().toISOString() };
   if (type === 'pick') p.selected = nodeId;
   p.requests.push(r);
   save(p, 'request');
@@ -245,6 +271,85 @@ export function waitForRequests(slug, timeoutMs, signal) {
     signal?.addEventListener?.('abort', finish);
   });
 }
+
+// ---------- nav edges ----------
+
+function getEdge(p, id) {
+  const e = p.edges.find((x) => x.id === id);
+  if (!e) throw new Error(`Edge "${id}" not found in project ${p.slug}.`);
+  return e;
+}
+
+export function addEdge(slug, { from, to, label = '' }) {
+  const p = loadProject(slug);
+  getNode(p, from); getNode(p, to);
+  if (from === to) throw new Error('An edge cannot link a node to itself.');
+  if (p.edges.some((e) => e.from === from && e.to === to)) throw new Error(`Edge ${from} -> ${to} already exists.`);
+  const e = { id: nextId(p, 'edge', 'e'), from, to, label: String(label || ''), kind: 'nav' };
+  p.edges.push(e);
+  save(p, 'edge');
+  return e;
+}
+
+export function updateEdge(slug, id, { label }) {
+  const p = loadProject(slug);
+  const e = getEdge(p, id);
+  if (label !== undefined) e.label = String(label);
+  save(p, 'edge');
+  return e;
+}
+
+export function deleteEdge(slug, id) {
+  const p = loadProject(slug);
+  const e = getEdge(p, id);
+  p.edges = p.edges.filter((x) => x !== e);
+  save(p, 'edge');
+  return e;
+}
+
+// ---------- notes (sticky notes on the canvas; pinned ones are design context) ----------
+
+export const NOTE_COLORS = ['yellow', 'blue', 'green', 'pink', 'gray'];
+
+function newNote(p, { text = '', pinned = false, color = 'yellow', pos = null, size = null }) {
+  if (!NOTE_COLORS.includes(color)) throw new Error(`color must be one of ${NOTE_COLORS.join(', ')}`);
+  const now = new Date().toISOString();
+  return { id: nextId(p, 'note', 't'), text: String(text), pinned: !!pinned, color, pos, size, createdAt: now, updatedAt: now };
+}
+
+function getNote(p, id) {
+  const n = p.notes.find((x) => x.id === id);
+  if (!n) throw new Error(`Note "${id}" not found in project ${p.slug}.`);
+  return n;
+}
+
+export function addNote(slug, fields = {}) {
+  const p = loadProject(slug);
+  const n = newNote(p, fields);
+  p.notes.push(n);
+  save(p, 'note');
+  return n;
+}
+
+export function updateNote(slug, id, patch) {
+  const p = loadProject(slug);
+  const n = getNote(p, id);
+  if (patch.color !== undefined && !NOTE_COLORS.includes(patch.color)) throw new Error(`color must be one of ${NOTE_COLORS.join(', ')}`);
+  for (const k of ['text', 'pinned', 'color', 'pos', 'size']) if (patch[k] !== undefined) n[k] = patch[k];
+  n.updatedAt = new Date().toISOString();
+  save(p, 'note');
+  return n;
+}
+
+export function deleteNote(slug, id) {
+  const p = loadProject(slug);
+  const n = getNote(p, id);
+  p.notes = p.notes.filter((x) => x !== n);
+  save(p, 'note');
+  return n;
+}
+
+export const pinnedContext = (p) => p.notes.filter((n) => n.pinned).map(({ id, text }) => ({ id, text }));
 
 // ---------- critiques ----------
 

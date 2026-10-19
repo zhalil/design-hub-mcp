@@ -7,7 +7,8 @@
     "start": "node src/server.js",
     "setup": "node cli/design-hub.js setup",
     "update": "node cli/design-hub.js update",
-    "preview": "node cli/design-hub.js serve --open"
+    "preview": "node cli/design-hub.js serve --open",
+    "test": "node --test test/"
   },
   "license": "MIT",
   "dependencies": {
