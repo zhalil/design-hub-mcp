@@ -381,7 +381,6 @@ try {
   // undoing a move of an auto-placed frame leaves it auto-placed (no stored pos)
   assert.equal(await posOf(b.id), undefined, 'B is auto-placed');
   await page.keyboard.press('Escape');
-  await page.evaluate(() => getSelection().removeAllRanges()); // the Shift+clicks above selected text: a drag on it starts a native drag
   await drag(...await labelOf(b.id), 96, 48);
   await until(async () => Boolean(await posOf(b.id)), 'dragging B stores its pos');
   await page.keyboard.press('Control+z');

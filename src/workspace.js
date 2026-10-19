@@ -288,7 +288,7 @@ export function addEdge(slug, { from, to, label = '' }) {
   getNode(p, from); getNode(p, to);
   if (from === to) throw new Error('An edge cannot link a node to itself.');
   if (p.edges.some((e) => e.from === from && e.to === to)) throw new Error(`Edge ${from} -> ${to} already exists.`);
-  const e = { id: nextId(p, 'edge', 'e'), from, to, label: String(label || ''), kind: 'nav' };
+  const e = { id: nextId(p, 'edge', 'e'), from, to, label: String(label || '').slice(0, 120), kind: 'nav' };
   p.edges.push(e);
   save(p, 'edge');
   return e;
