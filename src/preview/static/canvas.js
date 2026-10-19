@@ -322,14 +322,15 @@ import { createMinimap } from './minimap.js';
       n.pos = drag.pos = { x: Math.round(start.px + dx), y: Math.round(start.py + dy) };
       layoutAndRender();
     };
-    const up = () => {
-      removeEventListener('pointermove', move); removeEventListener('pointerup', up);
+    const up = (ev) => {
+      removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
       const n = project.nodes.find((x) => x.id === id);
       const done = () => { if (dragPos === drag) dragPos = null; };
-      if (moved && n?.pos) api(`/nodes/${id}`, { method: 'PATCH', body: n.pos }).catch((er) => showToast(er.message)).finally(done);
+      if (ev.type === 'pointercancel') { done(); if (moved) refresh(); } // no PATCH: put the frame back where the server has it
+      else if (moved && n?.pos) api(`/nodes/${id}`, { method: 'PATCH', body: n.pos }).catch((er) => showToast(er.message)).finally(done);
       else done();
     };
-    addEventListener('pointermove', move); addEventListener('pointerup', up);
+    addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
   }
 
   // Drag from a frame's link handle; dropping on another frame links the two.
@@ -340,13 +341,14 @@ import { createMinimap } from './minimap.js';
     linkDrag = { from, ...at(e) };
     const move = (ev) => { Object.assign(linkDrag, at(ev)); drawLinks(project.nodes); };
     const up = (ev) => {
-      removeEventListener('pointermove', move); removeEventListener('pointerup', up);
+      removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
       const { x, y } = at(ev);
       linkDrag = null; drawLinks(project.nodes);
+      if (ev.type === 'pointercancel') return;
       const to = Object.keys(positions).find((id) => { const r = positions[id]; return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h; });
       if (to && to !== from) linkFrames(from, to);
     };
-    addEventListener('pointermove', move); addEventListener('pointerup', up);
+    addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
   }
 
   $('#fit-btn').onclick = fitAll;
@@ -600,8 +602,9 @@ import { createMinimap } from './minimap.js';
     input.focus(); input.select();
     let cancel = false;
     input.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Enter') input.blur();
-      else if (ev.key === 'Escape') { cancel = true; input.blur(); }
+      // stop here: once the input is gone the window handler would see Enter (open Agent) / Escape (deselect)
+      if (ev.key === 'Enter') { ev.stopPropagation(); input.blur(); }
+      else if (ev.key === 'Escape') { ev.stopPropagation(); cancel = true; input.blur(); }
     });
     input.addEventListener('blur', () => {
       if (editingEdge !== id) return;

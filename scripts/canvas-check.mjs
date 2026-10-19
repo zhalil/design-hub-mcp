@@ -188,14 +188,15 @@ try {
     const pt = el.getPointAtLength(el.getTotalLength() / 2).matrixTransform(el.getScreenCTM());
     return [pt.x, pt.y];
   });
+  await page.click('#agent-close');
   await page.mouse.dblclick(...edgeMid);
   await page.fill('input.edge-label', 'Go');
   await page.keyboard.press('Enter');
   await until(async () => (await edges())[0]?.label === 'Go', 'the inline editor PATCHes the label');
   await until(async () => (await page.textContent('.edge-label').catch(() => '')) === 'Go', 'the pill shows the new label');
-  await page.click('span.edge-label');
+  assert.ok(await page.isHidden('#agent'), 'Enter in the label editor stays local: the Agent panel stays closed');
   assert.equal(await page.$('.frame.selected'), null, 'selecting an edge clears the frame selection');
-  await page.keyboard.press('Delete');
+  await page.keyboard.press('Delete'); // no click in between: the edge is still selected after Enter
   await until(async () => (await edges()).length === 0, 'Delete removes the selected edge');
   await until(async () => await navCount() === 0, 'the deleted edge is no longer drawn');
   await page.keyboard.press('Control+z');
