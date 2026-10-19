@@ -272,7 +272,6 @@ try {
   await until(async () => (await notes()).find((t) => t.id === back.id).pos.x !== back.pos.x, 'a header drag moves the note');
   const moved = (await notes()).find((t) => t.id === back.id).pos;
   assert.ok(moved.x % 24 === 0 && moved.y % 24 === 0, 'the moved note is snapped');
-  await page.waitForTimeout(300); // the undo step is pushed once the client's own refresh lands; nothing on screen shows it
   await page.keyboard.press('Control+z');
   await until(async () => JSON.stringify((await notes()).find((t) => t.id === back.id).pos) === JSON.stringify(back.pos), 'Ctrl+Z puts the note back');
 
@@ -286,6 +285,84 @@ try {
   assert.ok(await page.isHidden(`.note[data-id="${ctx.id}"] .del`), 'view mode: no note delete button');
   await page.click('#mode [data-mode="edit"]');
   assert.deepEqual(errors, [], 'no script errors after the note checks');
+
+  // ---- multi-select, group move with snap, undo of moves and deletes, rubber band, Link, auto layout
+  const nodes = async () => (await call('')).nodes;
+  const posOf = async (id) => (await nodes()).find((n) => n.id === id)?.pos;
+  const at = (id) => page.$eval(`.frame[data-id="${id}"]`, (el) => ({ x: parseFloat(el.style.left), y: parseFloat(el.style.top) }));
+  const labelOf = async (id) => { const r = await page.locator(`.frame[data-id="${id}"] .frame-label .name`).boundingBox(); return [r.x + 4, r.y + r.height / 2]; };
+  const bodyOf = async (id) => { const r = await page.locator(`.frame[data-id="${id}"] .shield`).boundingBox(); return [r.x + r.width / 2, r.y + r.height / 2]; };
+  const shiftClick = async (xy) => { await page.keyboard.down('Shift'); await page.mouse.click(...xy); await page.keyboard.up('Shift'); };
+  const selected = () => page.$$eval('.frame.selected, .note.selected', (l) => l.map((el) => el.dataset.id));
+  await call(`/notes/${(await notes()).find((t) => t.text === 'Users are dispatchers').id}`, 'DELETE'); // keep the frames' row free of notes for the rubber band
+  await page.click('#fit-btn'); await settle();
+  await page.keyboard.press('Escape');
+
+  // Shift+click two frames, drag one: both move by the same delta, the grabbed one onto the grid
+  await page.mouse.click(...await labelOf(a.id));
+  await shiftClick(await bodyOf(c.id));
+  assert.deepEqual((await selected()).sort(), [a.id, c.id].sort(), 'Shift+click adds a second frame');
+  const a0 = await at(a.id); const c0 = await at(c.id);
+  await drag(...await labelOf(a.id), 100, 40);
+  await until(async () => (await posOf(a.id))?.x !== a0.x && (await posOf(c.id))?.x !== c0.x, 'a group drag PATCHes both frames');
+  const a1 = await posOf(a.id); const c1 = await posOf(c.id);
+  assert.deepEqual([c1.x - c0.x, c1.y - c0.y], [a1.x - a0.x, a1.y - a0.y], 'both frames move by the same delta');
+  assert.ok(a1.x % 24 === 0 && a1.y % 24 === 0, 'the grabbed frame is snapped to the grid');
+  await page.keyboard.press('Control+z');
+  await until(async () => JSON.stringify([await posOf(a.id), await posOf(c.id)]) === JSON.stringify([a0, c0]), 'Ctrl+Z puts both frames back');
+
+  // Delete a frame that has an edge, then undo: same id, edge back
+  await page.mouse.click(...await labelOf(a.id));
+  const aEdges = (await edges()).filter((e) => e.from === a.id || e.to === a.id).map(({ from, to, label }) => ({ from, to, label }));
+  assert.ok(aEdges.length, 'frame A has an edge');
+  page.once('dialog', (d) => d.accept());
+  await page.keyboard.press('Delete');
+  await until(async () => !(await nodes()).some((n) => n.id === a.id), 'Delete removes the selected frame');
+  await until(async () => !await page.$(`.frame[data-id="${a.id}"]`), 'the deleted frame is no longer drawn');
+  await page.keyboard.press('Control+z');
+  await until(async () => (await nodes()).some((n) => n.id === a.id), 'Ctrl+Z restores the frame under the same id');
+  assert.deepEqual((await edges()).filter((e) => e.from === a.id || e.to === a.id).map(({ from, to, label }) => ({ from, to, label })), aEdges, 'Ctrl+Z restores its edges, once');
+  await until(async () => Boolean(await page.$(`.frame[data-id="${a.id}"]`)), 'the restored frame is drawn');
+
+  // rubber band on empty mat around A and C
+  await page.keyboard.press('Escape');
+  const ra = await page.locator(`.frame[data-id="${a.id}"] .frame-label`).boundingBox();
+  const rc = await page.locator(`.frame[data-id="${c.id}"]`).boundingBox();
+  const bandFrom = [ra.x + 5, ra.y - 15];
+  assert.equal(await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.id, bandFrom), 'mat', 'the band starts on empty mat');
+  await drag(...bandFrom, rc.x + rc.width - 5 - bandFrom[0], rc.y + rc.height - 5 - bandFrom[1]);
+  assert.deepEqual((await selected()).sort(), [a.id, c.id].sort(), 'the rubber band selects the two frames it touches');
+  assert.equal(await page.$('.band'), null, 'the band is removed on release');
+
+  // Shift-select C then A, Link: a C -> A edge
+  await page.keyboard.press('Escape');
+  await page.mouse.click(...await labelOf(c.id));
+  await shiftClick(await bodyOf(a.id));
+  await page.click('#frame-tools [data-act="link"]');
+  await until(async () => (await edges()).some((e) => e.from === c.id && e.to === a.id), 'Link joins the first selected frame to the second');
+
+  // Auto layout puts the source of a nav edge left of its target
+  await call(`/nodes/${c.id}`, 'PATCH', { x: (await posOf(a.id)).x + 2400, y: 0 });
+  await until(async () => (await at(c.id)).x > (await at(a.id)).x, 'C starts right of A');
+  const beforeLayout = await at(c.id);
+  await page.click('[data-act="autolayout"]');
+  await until(async () => (await posOf(c.id)).x < (await posOf(a.id)).x, 'Auto layout puts C (source) left of A (target)');
+  await page.keyboard.press('Control+z');
+  await until(async () => JSON.stringify(await posOf(c.id)) === JSON.stringify(beforeLayout), 'Ctrl+Z undoes the auto layout');
+
+  // View mode: selection works, delete does not
+  await page.click('#mode [data-mode="view"]');
+  await page.click('#fit-btn'); await settle();
+  await page.keyboard.press('Escape');
+  await page.mouse.click(...await labelOf(a.id));
+  await shiftClick(await bodyOf(c.id));
+  assert.equal((await selected()).length, 2, 'view mode: Shift+click still selects');
+  const count = (await nodes()).length;
+  await page.keyboard.press('Delete');
+  await page.waitForTimeout(300);
+  assert.equal((await nodes()).length, count, 'view mode: Delete does not delete');
+  await page.click('#mode [data-mode="edit"]');
+  assert.deepEqual(errors, [], 'no script errors after the selection checks');
 
   if (process.argv[2]) {
     await page.screenshot({ path: process.argv[2] });

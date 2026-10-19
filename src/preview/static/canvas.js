@@ -1,5 +1,5 @@
 // Design Hub canvas: infinite pan/zoom mat with live design frames laid out as iteration trees.
-import { computeLayout, edgeGeometry, snap } from './layout.js';
+import { autoLayout, computeLayout, edgeGeometry, snap } from './layout.js';
 import { createHistory } from './history.js';
 import { createMinimap } from './minimap.js';
 
@@ -32,7 +32,8 @@ import { createMinimap } from './minimap.js';
   let edgeSel = null;           // selected nav edge id (never together with a frame/note selection)
   let linkDrag = null;          // { from, x, y } while dragging a link handle, in world coords
   let editingEdge = null;       // edge id whose label is being edited inline
-  let dragPos = null;           // { id, pos } while a frame or note is dragged: refresh() must not snap it back
+  let dragging = null;          // Map id -> pos while frames/notes are dragged: refresh() must not snap them back
+  let band = null;              // { x, y, base, el } while a selection rectangle is dragged on empty mat
   const noteEls = new Map();    // noteId -> element
   const noteDrafts = new Map(); // noteId -> text typed here and not yet saved: refresh() keeps it over the server text
   const noteTimers = new Map(); // noteId -> idle-save timer
@@ -63,8 +64,7 @@ import { createMinimap } from './minimap.js';
 
   async function refresh() {
     try { project = await api(''); } catch (e) { showToast(e.message); return; }
-    const dragged = dragPos?.pos && [...project.nodes, ...project.notes].find((n) => n.id === dragPos.id);
-    if (dragged) dragged.pos = dragPos.pos;
+    if (dragging) for (const n of [...project.nodes, ...project.notes]) if (dragging.has(n.id)) n.pos = dragging.get(n.id);
     for (const t of project.notes) if (noteDrafts.has(t.id)) t.text = noteDrafts.get(t.id);
     if (edgeSel && !project.edges.some((e) => e.id === edgeSel)) edgeSel = null;
     document.title = `${project.name} · Design Hub`;
@@ -165,14 +165,14 @@ import { createMinimap } from './minimap.js';
       <button class="del" title="Delete note" aria-label="Delete note">×</button></div><textarea aria-label="Note" placeholder="Write a note…"></textarea>`;
     el.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 || space || tool === 'hand') return; // the mat pans
+      if (e.target.closest('.note-head') && !e.target.closest('button')) { startDrag(e, id); return; }
       e.stopPropagation();
-      select(id);
-      if (e.target.closest('.note-head') && !e.target.closest('button')) startNoteDrag(e, id);
+      if (e.shiftKey) toggleSelect(id); else select(id);
     });
     el.querySelector('.note-head').addEventListener('click', (e) => {
       const b = e.target.closest('button');
       if (!b || !note(id) || !canEdit()) return;
-      if (b.classList.contains('del')) deleteNote(id);
+      if (b.classList.contains('del')) deleteItems([id]);
       else patchNote(id, b.dataset.color ? { color: b.dataset.color } : { pinned: !note(id).pinned });
     });
     const ta = el.querySelector('textarea');
@@ -197,58 +197,52 @@ import { createMinimap } from './minimap.js';
 
   const patchNote = (id, body) => api(`/notes/${id}`, { method: 'PATCH', body }).then(refresh, (e) => showToast(e.message));
 
-  function startNoteDrag(e, id) {
-    if (mode !== 'edit') { startPan(e); return; }
-    e.preventDefault();
-    const from = noteRect(note(id));
-    const start = { x: e.clientX, y: e.clientY };
-    const drag = { id, pos: null };
-    dragPos = drag;
-    const move = (ev) => {
-      const dx = (ev.clientX - start.x) / view.s; const dy = (ev.clientY - start.y) / view.s;
-      if (!drag.pos && Math.abs(dx) + Math.abs(dy) <= 4 / view.s) return;
-      drag.pos = { x: snap(from.x + dx), y: snap(from.y + dy) };
-      if (note(id)) { note(id).pos = drag.pos; renderNotes(); }
-    };
-    const up = (ev) => {
-      removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
-      const done = () => { if (dragPos === drag) dragPos = null; };
-      const to = drag.pos; const old = { x: from.x, y: from.y };
-      if (ev.type === 'pointercancel' || !to || (to.x === old.x && to.y === old.y)) { done(); if (to) refresh(); return; }
-      undoable(() => moveNote(id, to), { label: 'Move note', undo: () => moveNote(id, old), redo: () => moveNote(id, to) }).finally(done);
-    };
-    addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
-  }
-
   // Undo/redo re-create a deleted note under a new id; steps resolve the id they captured through this map.
   const noteAlias = new Map();
   const noteId = (id) => { while (noteAlias.has(id)) id = noteAlias.get(id); return id; };
-  const moveNote = async (id, pos) => { await api(`/notes/${noteId(id)}`, { method: 'PATCH', body: { pos } }); await refresh(); };
   async function dropNote(id) { // deletes the note and returns it, to re-create it later
     const t = note(noteId(id));
     if (!t) throw new Error('That note no longer exists');
-    await api(`/notes/${t.id}`, { method: 'DELETE' }); await refresh();
+    await api(`/notes/${t.id}`, { method: 'DELETE' });
     return t;
   }
   async function reviveNote(t) {
     const { text, pinned, color, pos, size } = t;
     const n = await api('/notes', { method: 'POST', body: { text, pinned, color, pos, size } });
-    noteAlias.set(t.id, n.id); await refresh();
+    noteAlias.set(t.id, n.id);
   }
 
   function addNote(pos) {
     if (!canEdit()) return;
     let id = null; let gone = null;
-    undoable(async () => {
-      ({ id } = await api('/notes', { method: 'POST', body: { text: '', pos } }));
-      await refresh(); select(id); noteEls.get(id)?.querySelector('textarea').focus();
-    }, { label: 'Add note', undo: async () => { gone = await dropNote(id); }, redo: () => reviveNote(gone) });
+    undoable(async () => { ({ id } = await api('/notes', { method: 'POST', body: { text: '', pos } })); },
+      { label: 'Add note', undo: async () => { gone = await dropNote(id); }, redo: () => reviveNote(gone) })
+      .then(() => { if (id && note(id)) { select(id); noteEls.get(id)?.querySelector('textarea').focus(); } });
   }
 
-  function deleteNote(id) {
-    if (!canEdit()) return;
-    let gone = null;
-    undoable(async () => { gone = await dropNote(id); }, { label: 'Delete note', undo: () => reviveNote(gone), redo: async () => { gone = await dropNote(gone.id); } });
+  // Deletes frames and notes as one step. Undo restores frames (same id, file, edges) newest-deleted first,
+  // so an edge between two deleted frames comes back with the second one, and re-creates notes.
+  function deleteItems(ids) {
+    if (!canEdit() || !ids.length) return;
+    const frameIds = ids.filter((x) => positions[x]); const noteIds = ids.filter((x) => !positions[x] && note(x));
+    const one = frameIds.length === 1 && !noteIds.length && project.nodes.find((n) => n.id === frameIds[0]);
+    if (frameIds.length && !confirm(one ? `Delete “${one.label}”? Its file moves to the project's .trash folder.`
+      : `Delete ${frameIds.length + noteIds.length} items? Design files move to the project's .trash folder.`)) return;
+    let gone = [];
+    const drop = async () => {
+      for (const id of frameIds) await api(`/nodes/${id}`, { method: 'DELETE' });
+      gone = [];
+      for (const id of noteIds) gone.push(await dropNote(id));
+    };
+    const label = one ? 'Delete design' : frameIds.length + noteIds.length === 1 ? 'Delete note' : `Delete ${frameIds.length + noteIds.length} items`;
+    undoable(drop, {
+      label,
+      undo: async () => {
+        for (const id of [...frameIds].reverse()) await api(`/nodes/${id}/restore`, { method: 'POST', body: {} });
+        for (const t of gone) await reviveNote(t);
+      },
+      redo: drop,
+    });
   }
 
   const pinPop = $('#pinned-pop');
@@ -309,9 +303,13 @@ import { createMinimap } from './minimap.js';
     const f = { el, iframe: el.querySelector('iframe'), name: el.querySelector('.name'), meta: el.querySelector('.meta'), chosen: el.querySelector('.chosen'), work: el.querySelector('.working'), src: '' };
     f.iframe.title = n.label;
     const shield = el.querySelector('.shield');
-    shield.addEventListener('pointerdown', (e) => { if (e.button === 0 && !space && tool === 'select') { select(n.id); startPan(e); } });
+    shield.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || space || tool !== 'select') return;
+      if (e.shiftKey) { e.stopPropagation(); toggleSelect(n.id); return; }
+      select(n.id); startPan(e);
+    });
     shield.addEventListener('dblclick', () => setInteract(n.id));
-    el.querySelector('.frame-label').addEventListener('pointerdown', (e) => startFrameDrag(e, n.id));
+    el.querySelector('.frame-label').addEventListener('pointerdown', (e) => startDrag(e, n.id));
     el.querySelector('.frame-label').addEventListener('dblclick', () => renameNode(n.id));
     el.querySelector('.link-handle').addEventListener('pointerdown', (e) => startLinkDrag(e, n.id));
     return f;
@@ -430,6 +428,12 @@ import { createMinimap } from './minimap.js';
       return;
     }
     const bg = e.target === mat || e.target === world || e.target === links || e.target.closest?.('#links');
+    if (e.button === 0 && bg && tool === 'select' && !space) {
+      e.preventDefault();
+      band = { x: e.clientX, y: e.clientY, base: e.shiftKey ? [...selection] : [], el: null };
+      mat.setPointerCapture?.(e.pointerId);
+      return;
+    }
     if (e.button === 1 || (e.button === 0 && (space || bg || tool === 'hand'))) {
       e.preventDefault();
       startPan(e);
@@ -437,6 +441,7 @@ import { createMinimap } from './minimap.js';
     }
   });
   mat.addEventListener('pointermove', (e) => {
+    if (band) { moveBand(e); return; }
     if (!panState) return;
     const dx = e.clientX - panState.x; const dy = e.clientY - panState.y;
     if (Math.abs(dx) + Math.abs(dy) > 3) { panState.moved = true; mat.classList.add('panning'); }
@@ -444,6 +449,7 @@ import { createMinimap } from './minimap.js';
     applyView();
   });
   const endPan = () => {
+    if (band) { endBand(); return; }
     if (!panState) return;
     if (panState.background && !panState.moved) { select(null); setInteract(null); setPick(null); }
     panState = null; mat.classList.remove('panning');
@@ -451,32 +457,86 @@ import { createMinimap } from './minimap.js';
   mat.addEventListener('pointerup', endPan);
   mat.addEventListener('pointercancel', endPan);
 
-  function startFrameDrag(e, id) {
+  // Rubber band: selects every frame and note it touches (Shift keeps the earlier selection).
+  function moveBand(e) {
+    const x1 = Math.min(band.x, e.clientX); const y1 = Math.min(band.y, e.clientY);
+    const x2 = Math.max(band.x, e.clientX); const y2 = Math.max(band.y, e.clientY);
+    if (!band.el) {
+      if (x2 - x1 + y2 - y1 <= 3) return;
+      band.el = document.body.appendChild(Object.assign(document.createElement('div'), { className: 'band' }));
+    }
+    Object.assign(band.el.style, { left: `${x1}px`, top: `${y1}px`, width: `${x2 - x1}px`, height: `${y2 - y1}px` });
+    const w = (x, y) => [(x - view.x) / view.s, (y - view.y) / view.s];
+    const [wx1, wy1] = w(x1, y1); const [wx2, wy2] = w(x2, y2);
+    const hits = [...Object.keys(positions), ...(project?.notes || []).map((t) => t.id)].filter((id) => {
+      const r = rectOf(id); return r.x < wx2 && r.x + r.w > wx1 && r.y < wy2 && r.y + r.h > wy1;
+    });
+    setSelection([...new Set([...band.base, ...hits])]);
+  }
+  function endBand() {
+    if (band.el) band.el.remove();
+    else if (!band.base.length) { select(null); setInteract(null); setPick(null); } // a plain click on empty mat
+    band = null;
+  }
+
+  // Dragging a frame label or note header moves the whole selection; the grabbed item snaps to the grid
+  // and the others keep their offsets. One history step puts them all back.
+  function startDrag(e, id) {
     if (e.button !== 0 || space || tool === 'hand') return; // the mat pans
     e.stopPropagation();
-    select(id);
+    if (e.shiftKey) { toggleSelect(id); return; }
+    const inSelection = selection.has(id);
+    if (!inSelection) select(id);
     if (mode !== 'edit') { startPan(e); return; }
-    const p = positions[id];
-    const start = { x: e.clientX, y: e.clientY, px: p.x, py: p.y };
-    const drag = { id, pos: null };
-    dragPos = drag;
-    let moved = false;
+    const from = new Map([...selection].filter(rectOf).map((x) => [x, { x: rectOf(x).x, y: rectOf(x).y }]));
+    const isFrame = new Map([...from.keys()].map((x) => [x, Boolean(positions[x])]));
+    const start = { x: e.clientX, y: e.clientY };
+    const drag = new Map();
+    dragging = drag;
     const move = (ev) => {
       const dx = (ev.clientX - start.x) / view.s; const dy = (ev.clientY - start.y) / view.s;
-      if (Math.abs(dx) + Math.abs(dy) > 4 / view.s) moved = true;
-      const n = project.nodes.find((x) => x.id === id);
-      n.pos = drag.pos = { x: Math.round(start.px + dx), y: Math.round(start.py + dy) };
+      if (!drag.size && Math.abs(dx) + Math.abs(dy) <= 4 / view.s) return;
+      const o = from.get(id);
+      const sx = snap(o.x + dx) - o.x; const sy = snap(o.y + dy) - o.y;
+      for (const [x, p] of from) {
+        const pos = { x: p.x + sx, y: p.y + sy };
+        drag.set(x, pos);
+        const it = project.nodes.find((n) => n.id === x) || note(x);
+        if (it) it.pos = pos;
+      }
       layoutAndRender();
     };
     const up = (ev) => {
       removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
-      const n = project.nodes.find((x) => x.id === id);
-      const done = () => { if (dragPos === drag) dragPos = null; };
-      if (ev.type === 'pointercancel') { done(); if (moved) refresh(); } // no PATCH: put the frame back where the server has it
-      else if (moved && n?.pos) api(`/nodes/${id}`, { method: 'PATCH', body: n.pos }).catch((er) => showToast(er.message)).finally(done);
-      else done();
+      const done = () => { if (dragging === drag) dragging = null; };
+      const to = [...drag].map(([x, pos]) => ({ id: x, frame: isFrame.get(x), pos }));
+      if (ev.type === 'pointercancel' || !to.length || (to[0].pos.x === from.get(to[0].id).x && to[0].pos.y === from.get(to[0].id).y)) {
+        done();
+        if (to.length) refresh(); // no PATCH: put everything back where the server has it
+        else if (inSelection && ev.type !== 'pointercancel') select(id); // a click inside a multi-selection narrows it
+        return;
+      }
+      const back = to.map((m) => ({ ...m, pos: from.get(m.id) }));
+      const label = to.length > 1 ? `Move ${to.length} items` : to[0].frame ? 'Move design' : 'Move note';
+      // done() before the refresh: a failed PATCH must not keep the items where they were dropped
+      undoable(() => moveItems(to).finally(done), { label, undo: () => moveItems(back), redo: () => moveItems(to) });
     };
     addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+  }
+  const moveItems = (list) => Promise.all(list.map(({ id, frame, pos }) => (frame
+    ? api(`/nodes/${id}`, { method: 'PATCH', body: pos })
+    : api(`/notes/${noteId(id)}`, { method: 'PATCH', body: { pos } }))));
+
+  function arrange() {
+    if (!project || !canEdit()) return;
+    const next = autoLayout(project.nodes, project.edges, sizeOf);
+    const to = []; const back = [];
+    for (const [id, pos] of Object.entries(next)) {
+      const p = positions[id];
+      if (p && (p.x !== pos.x || p.y !== pos.y)) { to.push({ id, frame: true, pos }); back.push({ id, frame: true, pos: { x: p.x, y: p.y } }); }
+    }
+    if (!to.length) { showToast('Already laid out'); return; }
+    undoable(() => moveItems(to), { label: 'Auto layout', undo: () => moveItems(back), redo: () => moveItems(to) });
   }
 
   // Drag from a frame's link handle; dropping on another frame links the two.
@@ -544,15 +604,24 @@ import { createMinimap } from './minimap.js';
     const b = e.target.closest('button'); if (!b) return;
     if (b.dataset.tool) setTool(b.dataset.tool);
     else if (b.dataset.act === 'duplicate' && primary()) tools.querySelector('[data-act="duplicate"]').click();
+    else if (b.dataset.act === 'autolayout') arrange();
     else if (b.dataset.act === 'pinned') { pinPop.hidden = !pinPop.hidden; renderPinned(); }
   });
 
-  async function undoRedo(redo) {
+  // Canvas changes and undo/redo run one at a time, in order: a fast Ctrl+Z waits for the change before it.
+  let queue = Promise.resolve();
+  const serial = (fn) => (queue = queue.then(fn).catch((e) => showToast(e.message)));
+  // The step is pushed as soon as the server took the change, before the refresh. A failed change still
+  // refreshes, so the canvas shows what the server has.
+  const undoable = (run, step) => serial(async () => { try { await run(); history.push(step); } finally { await refresh(); } });
+  function undoRedo(redo) {
     if (!canEdit()) return;
-    try {
-      const label = await (redo ? history.redo() : history.undo());
-      if (label) showToast(`${redo ? 'Redo' : 'Undo'}: ${label}`);
-    } catch (e) { showToast(e.message); }
+    serial(async () => {
+      try {
+        const label = await (redo ? history.redo() : history.undo());
+        if (label) showToast(`${redo ? 'Redo' : 'Undo'}: ${label}`);
+      } finally { await refresh(); }
+    });
   }
 
   // ---------------- layers ----------------
@@ -587,12 +656,14 @@ import { createMinimap } from './minimap.js';
   };
 
   // ---------------- selection & modes ----------------
-  function select(id) {
+  function select(id) { setSelection(id ? [id] : []); }
+  function toggleSelect(id) { setSelection(selection.has(id) ? [...selection].filter((x) => x !== id) : [...selection, id]); }
+  function setSelection(ids) {
     if (edgeSel) markEdge(null);
-    if (selection.size === (id ? 1 : 0) && (!id || selection.has(id))) return;
+    if (ids.length === selection.size && ids.every((x) => selection.has(x))) return;
     selection.clear();
-    if (id) selection.add(id);
-    if (picked && picked.nodeId !== id) picked = null;
+    for (const x of ids) selection.add(x);
+    if (picked && picked.nodeId !== primary()) picked = null;
     for (const [fid, f] of frames) f.el.classList.toggle('selected', selection.has(fid));
     for (const [nid, el] of noteEls) el.classList.toggle('selected', selection.has(nid));
     placeTools();
@@ -682,11 +753,7 @@ import { createMinimap } from './minimap.js';
       else if (act === 'fit-height') { fullHeight[id] = !fullHeight[id]; savePref('fullHeight', fullHeight); layoutAndRender(); }
       else if (act === 'duplicate') { if (!canEdit()) return; const n = await api(`/nodes/${id}/duplicate`, { method: 'POST', body: {} }); await refresh(); select(n.id); }
       else if (act === 'favorite') { await api('/select', { method: 'POST', body: { nodeId: project.selected === id ? null : id } }); }
-      else if (act === 'delete') {
-        if (!canEdit()) return;
-        const n = project.nodes.find((x) => x.id === id);
-        if (confirm(`Delete “${n.label}”? Its file moves to the project's .trash folder.`)) { await api(`/nodes/${id}`, { method: 'DELETE' }); select(null); }
-      }
+      else if (act === 'delete') deleteItems([id]);
     } catch (er) { showToast(er.message); }
   });
 
@@ -704,13 +771,9 @@ import { createMinimap } from './minimap.js';
     if (!e) throw new Error('That link no longer exists');
     return e.id;
   }
-  const edgeCall = async (path, opts) => { await api(path, opts); await refresh(); };
-  const addEdge = (from, to, label = '') => edgeCall('/edges', { method: 'POST', body: { from, to, label } });
-  const removeEdge = (from, to) => edgeCall(`/edges/${edgeId(from, to)}`, { method: 'DELETE' });
-  const labelEdge = (from, to, label) => edgeCall(`/edges/${edgeId(from, to)}`, { method: 'PATCH', body: { label } });
-  async function undoable(run, step) {
-    try { await run(); history.push(step); } catch (e) { showToast(e.message); }
-  }
+  const addEdge = (from, to, label = '') => api('/edges', { method: 'POST', body: { from, to, label } });
+  const removeEdge = (from, to) => api(`/edges/${edgeId(from, to)}`, { method: 'DELETE' });
+  const labelEdge = (from, to, label) => api(`/edges/${edgeId(from, to)}`, { method: 'PATCH', body: { label } });
 
   function linkFrames(from, to) {
     if (from === to || !canEdit()) return;
@@ -998,8 +1061,7 @@ import { createMinimap } from './minimap.js';
     else if (e.key === '+' || e.key === '=' || e.key === '-') keyZoom(e.key);
     else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undoRedo(e.shiftKey); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && edgeSel) deleteEdge(edgeSel);
-    else if ((e.key === 'Delete' || e.key === 'Backspace') && selection.size === 1 && note([...selection][0])) deleteNote([...selection][0]);
-    else if ((e.key === 'Delete' || e.key === 'Backspace') && primary()) tools.querySelector('[data-act="delete"]').click();
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && selection.size) deleteItems([...selection]);
     else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'd' && primary()) { e.preventDefault(); tools.querySelector('[data-act="duplicate"]').click(); }
     else if (e.metaKey || e.ctrlKey || e.altKey) { /* leave other shortcuts to the browser */ }
     else if (e.key.toLowerCase() === 'v') setTool('select');

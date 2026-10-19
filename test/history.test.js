@@ -25,3 +25,12 @@ test('limit drops the oldest step', async () => {
   assert.equal(await h.undo(), 3); assert.equal(await h.undo(), 2);
   assert.equal(h.canUndo(), false); assert.equal(await h.undo(), null);
 });
+
+test('a failed undo keeps the step for another try', async () => {
+  const h = createHistory(); let fail = true;
+  h.push({ label: 1, undo: () => { if (fail) throw new Error('offline'); }, redo: () => {} });
+  await assert.rejects(h.undo(), /offline/);
+  assert.equal(h.canUndo(), true); assert.equal(h.canRedo(), false);
+  fail = false;
+  assert.equal(await h.undo(), 1);
+});

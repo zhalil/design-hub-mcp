@@ -100,6 +100,7 @@ body[data-mode="view"] .link-handle, #mat.hand .link-handle, #mat.space .link-ha
 }
 .note-yellow { --note: #fde68a; } .note-blue { --note: #bfdbfe; } .note-green { --note: #bbf7d0; } .note-pink { --note: #fbcfe8; } .note-gray { --note: #e4e4e7; }
 .note.selected { outline: calc(3px / var(--s)) solid var(--signal); }
+.band { position: fixed; z-index: 10; pointer-events: none; border: 1px solid var(--signal); background: color-mix(in oklab, var(--signal) 12%, transparent); }
 .note-head { display: flex; align-items: center; gap: 6px; padding: 4px 6px 0; cursor: grab; user-select: none; }
 .note-head button { border: 0; background: none; padding: 2px 4px; border-radius: 4px; line-height: 1; color: inherit; }
 .note-head button:hover { background: rgba(0, 0, 0, .08); }
@@ -194,6 +195,7 @@ body.layers-open #lefttools { left: 284px; }
 .layer-note .name::before { content: "▤ "; color: var(--muted); }
 
 #frame-tools { position: fixed; z-index: 22; /* above #topright and #agent */ display: flex; align-items: center; gap: 2px; padding: 4px; white-space: nowrap; transform: translateY(-100%); }
+#frame-tools[hidden] { display: none; }
 #frame-tools button, #frame-tools a { border: 0; background: none; padding: 6px 9px; border-radius: 6px; font-size: 13px; font-weight: 500; color: var(--ink); text-decoration: none; display: inline-flex; align-items: center; }
 #frame-tools button:hover, #frame-tools a:hover { background: var(--paper-2); }
 #frame-tools button[aria-pressed="true"] { background: var(--signal); color: var(--signal-ink); }
