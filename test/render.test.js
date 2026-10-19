@@ -8,7 +8,8 @@ const html = `<!doctype html><html><head><meta name="viewport" content="width=de
 
 test('screenshot and lint render in a real browser over CDP', async (t) => {
   const avail = await browserAvailable();
-  if (!avail.ok) return t.skip(`no browser: ${avail.error}`);
+  if (!avail.ok && avail.error.startsWith('No browser available')) return t.skip(avail.error);
+  assert.ok(avail.ok, avail.error);
   t.after(closeBrowser);
   t.diagnostic(`browser: ${avail.browser}`);
   const server = http.createServer((req, res) => {

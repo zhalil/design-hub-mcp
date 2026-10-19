@@ -23,7 +23,7 @@
     "design-hub-mcp": "src/server.js"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=20"
   },
   "files": [
     "src",

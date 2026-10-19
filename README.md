@@ -35,7 +35,7 @@ claude -p (фоновый, ваша подписка) ──HTTP /mcp + токе
 Нужны:
 
 - **Claude Code** с входом по подписке (`claude`, затем `/login`);
-- **Node.js 22+** и **git**;
+- **Node.js 20+** и **git**;
 - **Python 3** — для UI UX Pro Max;
 - **Chrome или Edge** — для скриншотов и линта.
 

@@ -47,7 +47,8 @@ async function main() {
         // playwright-core is a dev dependency only; fetch the pinned version just to download the headless shell
         const pw = createRequire(import.meta.url)('../package.json').devDependencies['playwright-core'];
         console.log('Installing headless Chromium for screenshots/lint…');
-        spawnSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['-y', `playwright-core@${pw}`, 'install', '--only-shell', 'chromium'], { stdio: 'inherit', shell: process.platform === 'win32' });
+        const r = spawnSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['-y', `playwright-core@${pw}`, 'install', '--only-shell', 'chromium'], { stdio: 'inherit', shell: process.platform === 'win32' });
+        if (r.status !== 0) console.log('Headless Chromium download failed. Install Google Chrome or Microsoft Edge instead, or set DESIGN_HUB_CHROME to a Chrome/Chromium executable.');
       } else {
         console.log('\nScreenshots/lint use your installed Chrome or Edge. No Chrome? run: design-hub setup --browser');
       }
