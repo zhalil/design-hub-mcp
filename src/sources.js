@@ -89,6 +89,12 @@ async function applySparse(dir, patterns) {
 const samePatterns = async (dir, patterns) =>
   (await git(['-C', dir, 'sparse-checkout', 'list']).catch(() => '')) === patterns.join('\n');
 
+// Only the current snapshot is kept: drop older commits and half-downloaded packs left by dropped connections.
+async function compact(dir) {
+  await git(['-C', dir, 'reflog', 'expire', '--expire=now', '--all']);
+  await git(['-C', dir, 'gc', '--prune=now', '--quiet'], { timeout: 0 });
+}
+
 async function fetchRef(dir, ref) {
   await git(['-C', dir, 'fetch', '--quiet', '--depth', '1', '--filter=blob:none', 'origin', ref], { timeout: 600000 });
   return git(['-C', dir, 'rev-parse', 'FETCH_HEAD']);
@@ -122,6 +128,7 @@ async function cloneSource(src) {
   for (let i = 2; i <= include.length; i++) {
     await retry(() => applySparse(dir, [...include.slice(0, i), ...exclude]));
   }
+  await compact(dir);
   return sha;
 }
 
@@ -148,7 +155,7 @@ async function cloneMissing({ onProgress, onCloned } = {}) {
       const { include, exclude } = sparseSpec(src);
       const patterns = [...include, ...exclude];
       if (!(await samePatterns(sourceDir(src.id), patterns))) {
-        try { await applySparse(sourceDir(src.id), patterns); } catch (e) { errors.push(`${src.id}: ${e.message}`); }
+        try { await applySparse(sourceDir(src.id), patterns); await compact(sourceDir(src.id)); } catch (e) { errors.push(`${src.id}: ${e.message}`); }
       }
       continue;
     }
@@ -258,6 +265,7 @@ export async function applyUpdates({ ids } = {}) {
         const remote = await retry(() => fetchRef(dir, src.ref || 'HEAD'));
         if (remote === head) { results.push({ id: src.id, upToDate: true }); continue; }
         await retry(() => git(['-C', dir, 'checkout', '--quiet', '--force', '--detach', remote], { timeout: 0 }));
+        await compact(dir);
         const info = await commitInfo(dir, remote);
         lock[src.id] = { ref: src.ref, commit: remote, previous: head, updatedAt: new Date().toISOString(), commitDate: info.date, subject: info.subject };
         writeLock(lock);
