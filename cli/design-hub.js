@@ -44,10 +44,10 @@ async function main() {
       cat.invalidateCatalog();
       out({ sources: sources.sourcesStatus().map((s) => `${s.id} @ ${s.commit ?? '—'}${s.enabled ? '' : ' (disabled)'}`), catalog: cat.stats() });
       if (flags.browser) {
-        const require = createRequire(import.meta.url);
-        const cli = path.join(path.dirname(require.resolve('playwright-core/package.json')), 'cli.js');
+        // playwright-core is a dev dependency only; fetch the pinned version just to download the headless shell
+        const pw = createRequire(import.meta.url)('../package.json').devDependencies['playwright-core'];
         console.log('Installing headless Chromium for screenshots/lint…');
-        spawnSync(process.execPath, [cli, 'install', '--only-shell', 'chromium'], { stdio: 'inherit' });
+        spawnSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['-y', `playwright-core@${pw}`, 'install', '--only-shell', 'chromium'], { stdio: 'inherit', shell: process.platform === 'win32' });
       } else {
         console.log('\nScreenshots/lint use your installed Chrome or Edge. No Chrome? run: design-hub setup --browser');
       }

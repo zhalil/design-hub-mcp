@@ -19,7 +19,7 @@ if (process.env.DESIGN_HUB_WORKER === '1') {
   process.exit(0);
 }
 
-const required = ['@modelcontextprotocol/sdk', 'zod', 'yaml', 'playwright-core'];
+const required = ['@modelcontextprotocol/sdk', 'zod', 'yaml'];
 const missing = required.filter((p) => !fs.existsSync(path.join(root, 'node_modules', ...p.split('/'), 'package.json')));
 if (missing.length) {
   say(`installing dependencies (${missing.join(', ')}) — first start only…`);

@@ -14,7 +14,6 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
-    "playwright-core": "^1.64.1",
     "yaml": "^2.9.1",
     "zod": "^4.6.7"
   },
@@ -24,7 +23,7 @@
     "design-hub-mcp": "src/server.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "files": [
     "src",
@@ -33,5 +32,8 @@
     ".claude-plugin",
     "sources.json",
     "README.md"
-  ]
+  ],
+  "devDependencies": {
+    "playwright-core": "1.64.1"
+  }
 }

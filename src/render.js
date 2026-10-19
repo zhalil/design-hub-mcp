@@ -1,10 +1,11 @@
-// Rendering checks: screenshots and lint run in a real browser (playwright-core),
-// plus static checks of the HTML source that work without any browser.
+// Rendering checks: screenshots and lint run in the installed Chrome/Edge, driven over the DevTools
+// protocol (no playwright at runtime), plus static checks of the HTML source that work without any browser.
 // The anti-slop checks implement OpenDesign's craft/anti-ai-slop.md P0/P1 rules
 // and huashu-design's "Claude default look" tell.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { VIEWPORTS } from './workspace.js';
 import { enabledSources, sourceDir } from './sources.js';
 
@@ -12,34 +13,114 @@ let browserPromise = null;
 let idleTimer = null;
 let launchInfo = null;
 
+const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
+
+function findBrowser() {
+  if (process.env.DESIGN_HUB_CHROME) return { label: 'DESIGN_HUB_CHROME', exe: process.env.DESIGN_HUB_CHROME };
+  const home = os.homedir();
+  const env = process.env;
+  const installed = process.platform === 'win32'
+    ? [['Google Chrome', 'Google/Chrome/Application/chrome.exe'], ['Microsoft Edge', 'Microsoft/Edge/Application/msedge.exe'], ['Chromium', 'Chromium/Application/chrome.exe']]
+      .flatMap(([label, rel]) => [env.PROGRAMFILES, env['PROGRAMFILES(X86)'], env.LOCALAPPDATA].filter(Boolean).map((d) => [label, path.join(d, rel)]))
+    : process.platform === 'darwin'
+      ? [['Google Chrome', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'], ['Microsoft Edge', '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'], ['Chromium', '/Applications/Chromium.app/Contents/MacOS/Chromium']]
+      : [['Google Chrome', 'google-chrome'], ['Google Chrome', 'google-chrome-stable'], ['Microsoft Edge', 'microsoft-edge'], ['Chromium', 'chromium'], ['Chromium', 'chromium-browser']]
+        .flatMap(([label, bin]) => (env.PATH || '').split(path.delimiter).filter(Boolean).map((d) => [label, path.join(d, bin)]));
+  const hit = installed.find(([, p]) => isFile(p));
+  if (hit) return { label: hit[0], exe: hit[1] };
+  // Chrome-for-Testing headless shell left by `design-hub setup --browser` (or any playwright install), newest first
+  for (const cache of [path.join(home, '.cache', 'ms-playwright'), env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'ms-playwright'), path.join(home, 'Library', 'Caches', 'ms-playwright')].filter(Boolean)) {
+    let dirs;
+    try { dirs = fs.readdirSync(cache).filter((d) => /^chromium_headless_shell-\d+$/.test(d)).sort((a, b) => b.split('-')[1] - a.split('-')[1]); } catch { continue; }
+    for (const d of dirs) {
+      let subs;
+      try { subs = fs.readdirSync(path.join(cache, d)).filter((s) => s.startsWith('chrome-headless-shell-')); } catch { continue; }
+      for (const s of subs) {
+        const exe = path.join(cache, d, s, process.platform === 'win32' ? 'chrome-headless-shell.exe' : 'chrome-headless-shell');
+        if (isFile(exe)) return { label: `headless shell (${d})`, exe };
+      }
+    }
+  }
+  return null;
+}
+
+// Minimal CDP connection over the global WebSocket (Node >= 22); flattened sessions share one socket.
+function connect(wsUrl) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(wsUrl);
+    const pending = new Map();
+    const listeners = new Set();
+    let id = 0;
+    const conn = {
+      closed: false, listeners,
+      send: (method, params = {}, sessionId) => new Promise((res, rej) => {
+        if (conn.closed) return rej(new Error('browser connection closed'));
+        pending.set(++id, { res, rej });
+        ws.send(JSON.stringify({ id, method, params, sessionId }));
+      }),
+      close: () => ws.close(),
+    };
+    ws.onopen = () => resolve(conn);
+    ws.onerror = () => reject(new Error(`cannot connect to ${wsUrl}`));
+    ws.onclose = () => { conn.closed = true; for (const p of pending.values()) p.rej(new Error('browser connection closed')); pending.clear(); };
+    ws.onmessage = (e) => {
+      const m = JSON.parse(e.data);
+      if (!m.id) { for (const l of listeners) l(m); return; }
+      const p = pending.get(m.id);
+      pending.delete(m.id);
+      if (p) m.error ? p.rej(new Error(`${m.error.message}${m.error.data ? ` (${m.error.data})` : ''}`)) : p.res(m.result);
+    };
+  });
+}
+
 async function launch() {
-  let pw;
-  try { pw = await import('playwright-core'); } catch {
-    throw new Error('playwright-core is not installed. Run `npm install` in the design-hub folder.');
+  const found = findBrowser();
+  if (!found) throw new Error('No browser available for rendering. Install Google Chrome or Microsoft Edge, set DESIGN_HUB_CHROME to a Chrome/Chromium executable, or run `design-hub setup --browser`.');
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'design-hub-chrome-'));
+  const shell = /headless[-_]shell/i.test(path.basename(found.exe)); // the headless shell is headless already
+  const args = [...(shell ? [] : ['--headless=new']), '--remote-debugging-port=0', `--user-data-dir=${dataDir}`, '--no-first-run', '--no-default-browser-check', 'about:blank'];
+  const proc = spawn(found.exe, args, { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
+  const cleanup = () => { try { proc.kill(); } catch { /* gone */ } try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* still locked */ } };
+  process.once('exit', cleanup);
+  try {
+    const wsUrl = await new Promise((resolve, reject) => {
+      let log = '';
+      const timer = setTimeout(() => reject(new Error('no DevTools endpoint after 30s')), 30000);
+      proc.stderr.on('data', (d) => { // keep draining stderr so the browser never blocks on a full pipe
+        if (log === null) return;
+        log += d;
+        const m = log.match(/DevTools listening on (ws:\/\/\S+)/);
+        if (m) { clearTimeout(timer); log = null; resolve(m[1]); }
+      });
+      proc.on('error', (e) => { clearTimeout(timer); reject(e); });
+      proc.on('exit', (code) => { clearTimeout(timer); reject(new Error(`exited with code ${code}${log ? `: ${log.trim().split('\n').slice(-2).join(' | ')}` : ''}`)); });
+    });
+    const conn = await connect(wsUrl);
+    conn.shutdown = () => {
+      conn.close(); proc.kill(); process.off('exit', cleanup);
+      proc.once('exit', () => { try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ } });
+    };
+    launchInfo = `${found.label}: ${found.exe}`;
+    return conn;
+  } catch (e) {
+    cleanup(); process.off('exit', cleanup);
+    throw new Error(`Could not start ${found.label} (${found.exe}): ${e.message}. Set DESIGN_HUB_CHROME to another Chrome/Edge, or run \`design-hub setup --browser\`.`);
   }
-  const { chromium } = pw;
-  const attempts = [];
-  if (process.env.DESIGN_HUB_CHROME) attempts.push({ label: 'DESIGN_HUB_CHROME', opts: { executablePath: process.env.DESIGN_HUB_CHROME } });
-  attempts.push({ label: 'playwright chromium', opts: {} });
-  attempts.push({ label: 'Google Chrome', opts: { channel: 'chrome' } });
-  attempts.push({ label: 'Microsoft Edge', opts: { channel: 'msedge' } });
-  const errors = [];
-  for (const a of attempts) {
-    try {
-      const b = await chromium.launch({ headless: true, ...a.opts });
-      launchInfo = a.label;
-      return b;
-    } catch (e) { errors.push(`${a.label}: ${String(e.message).split('\n')[0]}`); }
-  }
-  throw new Error(`No browser available for rendering. Install Chrome, or run \`npx playwright install chromium\`, or set DESIGN_HUB_CHROME.\n${errors.join('\n')}`);
 }
 
 async function getBrowser() {
   clearTimeout(idleTimer);
+  if (browserPromise && (await browserPromise.catch(() => null))?.closed) browserPromise = null; // crashed or killed
   if (!browserPromise) browserPromise = launch().catch((e) => { browserPromise = null; throw e; });
   const b = await browserPromise;
-  idleTimer = setTimeout(async () => { const p = browserPromise; browserPromise = null; try { (await p)?.close(); } catch { /* ignore */ } }, 90000);
+  idleTimer = setTimeout(closeBrowser, 90000);
   return b;
+}
+
+export async function closeBrowser() {
+  clearTimeout(idleTimer);
+  const p = browserPromise; browserPromise = null;
+  try { (await p)?.shutdown(); } catch { /* ignore */ }
 }
 
 export async function browserAvailable() {
@@ -49,20 +130,47 @@ export async function browserAvailable() {
 async function withPage(url, viewport, fn) {
   const browser = await getBrowser();
   const vp = VIEWPORTS[viewport] || VIEWPORTS.desktop;
-  const ctx = await browser.newContext({ viewport: vp, deviceScaleFactor: 1, isMobile: viewport === 'mobile', hasTouch: viewport !== 'desktop' });
-  const page = await ctx.newPage();
+  const { targetId } = await browser.send('Target.createTarget', { url: 'about:blank' });
   const consoleErrors = [];
   const failedRequests = [];
-  page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text().slice(0, 300)); });
-  page.on('pageerror', (e) => consoleErrors.push(`pageerror: ${String(e.message).slice(0, 300)}`));
-  page.on('requestfailed', (r) => failedRequests.push(`${r.url().slice(0, 200)} (${r.failure()?.errorText || 'failed'})`));
-  page.on('response', (r) => { if (r.status() >= 400) failedRequests.push(`${r.url().slice(0, 200)} → ${r.status()}`); });
+  const requestUrls = new Map();
+  let sessionId;
+  let onLoad;
+  const loaded = new Promise((r) => { onLoad = r; });
+  const onEvent = ({ method, params: p, sessionId: s }) => {
+    if (s !== sessionId) return;
+    if (method === 'Runtime.consoleAPICalled' && p.type === 'error') consoleErrors.push(p.args.map((a) => a.value ?? a.description ?? '').join(' ').slice(0, 300));
+    else if (method === 'Runtime.exceptionThrown') consoleErrors.push(`pageerror: ${String(p.exceptionDetails.exception?.description || p.exceptionDetails.text).split('\n')[0].slice(0, 300)}`);
+    else if (method === 'Network.requestWillBeSent') requestUrls.set(p.requestId, p.request.url);
+    else if (method === 'Network.loadingFailed') failedRequests.push(`${(requestUrls.get(p.requestId) || '').slice(0, 200)} (${p.errorText || 'failed'})`);
+    else if (method === 'Network.responseReceived' && p.response.status >= 400) failedRequests.push(`${p.response.url.slice(0, 200)} → ${p.response.status}`);
+    else if (method === 'Page.loadEventFired') onLoad();
+  };
+  browser.listeners.add(onEvent);
+  let timer;
   try {
-    await page.goto(url, { waitUntil: 'load', timeout: 30000 });
-    await page.waitForTimeout(600); // fonts, entrance animations
+    ({ sessionId } = await browser.send('Target.attachToTarget', { targetId, flatten: true }));
+    const send = (method, params) => browser.send(method, params, sessionId);
+    await Promise.all(['Page.enable', 'Runtime.enable', 'Network.enable'].map((m) => send(m)));
+    await send('Emulation.setDeviceMetricsOverride', { width: vp.width, height: vp.height, deviceScaleFactor: 1, mobile: viewport === 'mobile' });
+    if (viewport !== 'desktop') await send('Emulation.setTouchEmulationEnabled', { enabled: true });
+    const nav = await send('Page.navigate', { url });
+    if (nav.errorText) throw new Error(`${nav.errorText} at ${url}`);
+    await Promise.race([loaded, new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`page load timed out after 30s: ${url}`)), 30000); })]);
+    await new Promise((r) => setTimeout(r, 600)); // fonts, entrance animations
+    const page = {
+      send,
+      evaluate: async (f) => {
+        const r = await send('Runtime.evaluate', { expression: `(${f})()`, returnByValue: true, awaitPromise: true });
+        if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text);
+        return r.result.value;
+      },
+    };
     return await fn(page, { consoleErrors, failedRequests, viewport: vp });
   } finally {
-    await ctx.close().catch(() => {});
+    clearTimeout(timer);
+    browser.listeners.delete(onEvent);
+    await browser.send('Target.closeTarget', { targetId }).catch(() => {});
   }
 }
 
@@ -70,8 +178,8 @@ export async function screenshot(url, viewport = 'desktop', { maxHeight = 2600, 
   return withPage(url, viewport, async (page, { viewport: vp }) => {
     const height = await page.evaluate(() => Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0));
     const clipH = Math.min(height, maxHeight);
-    const buf = await page.screenshot({ type: 'jpeg', quality, clip: { x: 0, y: 0, width: vp.width, height: Math.max(clipH, 1) }, fullPage: clipH > vp.height });
-    return { buffer: buf, width: vp.width, height: clipH, fullHeight: height, truncated: height > maxHeight };
+    const { data } = await page.send('Page.captureScreenshot', { format: 'jpeg', quality, clip: { x: 0, y: 0, width: vp.width, height: Math.max(clipH, 1), scale: 1 }, captureBeyondViewport: clipH > vp.height });
+    return { buffer: Buffer.from(data, 'base64'), width: vp.width, height: clipH, fullHeight: height, truncated: height > maxHeight };
   });
 }
 

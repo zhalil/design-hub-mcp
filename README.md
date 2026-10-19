@@ -23,7 +23,7 @@ claude -p (фоновый, ваша подписка) ──HTTP /mcp + токе
                          ├─ catalog ◄── ~/.design-hub/vendor/{open-design, huashu-design, ui-ux-pro-max}  (git, обновляются)
                          │            ◄── ~/.design-hub/overrides/{systems,templates,skills,rules,references}  (ваше, не затирается)
                          ├─ style engine (UI UX Pro Max, python)
-                         ├─ lint/screenshots (headless Chrome/Edge через playwright-core)
+                         ├─ lint/screenshots (установленный Chrome/Edge по DevTools protocol)
                          └─ preview http://127.0.0.1:7777 ◄──► браузер: холст, запросы, отчёты критики
                                        ▲ live reload (SSE) · очередь запросов ◄── canvas_wait_feedback
 ```
@@ -35,7 +35,7 @@ claude -p (фоновый, ваша подписка) ──HTTP /mcp + токе
 Нужны:
 
 - **Claude Code** с входом по подписке (`claude`, затем `/login`);
-- **Node.js 20+** и **git**;
+- **Node.js 22+** и **git**;
 - **Python 3** — для UI UX Pro Max;
 - **Chrome или Edge** — для скриншотов и линта.
 
@@ -116,7 +116,7 @@ node cli/design-hub.js setup          # клонирует источники з
 node cli/design-hub.js register       # = claude mcp add design-hub -s user -- node "<путь>\src\server.js"
 ```
 
-Без Chrome и Edge: `node cli/design-hub.js setup --browser` скачает headless Chromium.
+Lint и скриншоты запускают установленный Chrome или Edge в headless-режиме и управляют им по DevTools protocol (свой путь — `DESIGN_HUB_CHROME`). Без Chrome и Edge: `node cli/design-hub.js setup --browser` скачает headless Chromium.
 
 ## Как пользоваться
 
