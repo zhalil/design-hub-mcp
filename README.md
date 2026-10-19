@@ -56,7 +56,7 @@ claude -p (фоновый, ваша подписка) ──HTTP /mcp + токе
 - Claude Code склонирует репозиторий и сам поставит npm-зависимости по `package-lock.json`;
 - подключится MCP-сервер `design-hub` (его инструменты называются `mcp__plugin_design-hub_design-hub__*`);
 - появятся скиллы `/design-hub:design`, `/design-hub:canvas`, `/design-hub:update`;
-- при первом вызове сервер склонирует OpenDesign, huashu-design и UI UX Pro Max в `~/.design-hub/vendor` (около 10 секунд).
+- при первом запуске сервер распакует в `~/.design-hub/vendor` копию OpenDesign, huashu-design и UI UX Pro Max из самого плагина (`snapshot/`, ~5.6 МБ), каталог работает сразу и без GitHub. В фоне он сверит версии с GitHub и скачает только те источники, у которых вышла новая версия.
 
 **Настройки:** `/plugin configure design-hub@design-hub` или `/config`:
 
@@ -216,7 +216,9 @@ node cli/design-hub.js status
 
 То же доступно из Claude через инструмент `hub_update` (`check` / `apply` / `rollback`).
 
-Сервер раз в сутки проверяет обновления в фоне и сообщает о них в `hub_workflow` и `hub_status`. Применять их автоматически можно через `DESIGN_HUB_AUTO_UPDATE=1`.
+Сервер раз в сутки проверяет обновления в фоне и сам их применяет. Чтобы только сообщать о них в `hub_workflow` и `hub_status`, поставьте `DESIGN_HUB_AUTO_UPDATE=0`.
+
+Копия источников в плагине (`snapshot/`) обновляется перед релизом: `npm run snapshot` подтягивает свежие версии и пакует их.
 
 - **Закрепить версию:** укажите `"ref"` (тег или коммит) у источника в `sources.json`.
 - **Добавить источник:** новая запись в `sources.json` с картой `provides` (`systems` / `templates` / `skills` / `rules` / `references`). Для правки без изменения пакета скопируйте файл в `~/.design-hub/sources.json`. Пример — выключенный `anthropic-skills`.
@@ -269,7 +271,7 @@ node cli/design-hub.js skills remove huashu-design
 | `DESIGN_HUB_WORKSPACE` | `<cwd>\.design-hub` | где хранить проекты |
 | `DESIGN_HUB_HOME` | `~\.design-hub` | источники, overrides, состояние |
 | `DESIGN_HUB_UPDATE_CHECK_DAYS` | `1` | частота фоновой проверки (0 — выключить) |
-| `DESIGN_HUB_AUTO_UPDATE` | — | `1` — применять обновления автоматически |
+| `DESIGN_HUB_AUTO_UPDATE` | `1` | `0` — только сообщать об обновлениях, не применять |
 | `DESIGN_HUB_PYTHON` | авто (`py -3` / `python` / `python3`) | |
 | `DESIGN_HUB_CHROME` | авто (Chromium → Chrome → Edge) | путь к браузеру для линта и скриншотов |
 | `DESIGN_HUB_RUNNER` | `on` | `off` — не запускать фоновый Claude Code (переключатель в UI сильнее) |

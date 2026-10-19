@@ -9,7 +9,8 @@
     "update": "node cli/design-hub.js update",
     "preview": "node cli/design-hub.js serve --open",
     "test": "node --test test/",
-    "check:canvas": "node scripts/canvas-check.mjs"
+    "check:canvas": "node scripts/canvas-check.mjs",
+    "snapshot": "node scripts/snapshot.mjs"
   },
   "license": "MIT",
   "dependencies": {
@@ -31,6 +32,7 @@
     "skills",
     ".claude-plugin",
     "sources.json",
+    "snapshot",
     "README.md"
   ],
   "devDependencies": {

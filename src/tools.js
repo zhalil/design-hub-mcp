@@ -35,7 +35,10 @@ export function startHub() {
 }
 
 async function needSources() {
-  // A first download over a slow link can take many minutes: answer from what is already there rather than block the tool call.
+  // startHub() unpacks the bundled snapshot synchronously, so the catalog is usually ready right away.
+  startHub();
+  if (cat.catalog().items.length) return;
+  // No snapshot: a first download over a slow link can take many minutes, so wait only a little.
   await Promise.race([startHub(), new Promise((r) => setTimeout(r, 20000).unref?.())]);
   if (cat.catalog().items.length) return;
   if (!sourcesDone) throw new Error('Upstream sources (OpenDesign, huashu-design, UI UX Pro Max) are still downloading on first run. Try again in a few minutes; hub_status shows progress.');

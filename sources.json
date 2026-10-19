@@ -11,7 +11,7 @@
       "sparse": [
         "/design-systems/*/DESIGN*.md", "/design-systems/*/USAGE.md", "/design-systems/*/manifest.json",
         "/design-systems/*/tokens.css", "/design-systems/*/tailwind-v4.css", "/design-systems/*/design-tokens.json", "/design-systems/*/components.html",
-        "design-templates", "skills", "craft", "!/design-templates/*/scripts/verify-output/"
+        "design-templates", "skills", "craft", "/LICENSE*", "/NOTICE*", "!/design-templates/*/scripts/verify-output/"
       ],
       "provides": {
         "systems": ["design-systems"],
@@ -40,7 +40,7 @@
       "ref": "main",
       "enabled": true,
       "license": "MIT",
-      "sparse": ["src", ".claude"],
+      "sparse": ["src", ".claude", "/LICENSE*"],
       "provides": {
         "skills": [".claude/skills"],
         "styleEngine": "src/ui-ux-pro-max/scripts/search.py"

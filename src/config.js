@@ -42,8 +42,8 @@ export const config = {
   openMode: (process.env.DESIGN_HUB_OPEN || 'ready').toLowerCase(),
   /** days between background update checks (0 disables) */
   updateCheckDays: envInt('DESIGN_HUB_UPDATE_CHECK_DAYS', 1),
-  /** apply updates automatically after a background check */
-  autoUpdate: /^(1|true|yes)$/i.test(process.env.DESIGN_HUB_AUTO_UPDATE || ''),
+  /** apply updates automatically after a background check (on unless set to 0) */
+  autoUpdate: !/^(0|false|no)$/i.test(process.env.DESIGN_HUB_AUTO_UPDATE || ''),
   python: process.env.DESIGN_HUB_PYTHON || null,
   maxChars: envInt('DESIGN_HUB_MAX_CHARS', 18000),
 };

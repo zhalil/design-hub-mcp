@@ -1,14 +1,17 @@
 // Upstream repositories: clone, check for updates, apply, roll back.
 // Every source is a shallow, blob-less git checkout under ~/.design-hub/vendor/<id>,
-// so updating is a `git fetch --depth 1` + checkout and costs little.
+// so updating is a `git fetch --depth 1` + checkout and costs little. A fresh install starts
+// from the copy bundled in snapshot/ and swaps in a git checkout once upstream has moved on.
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
-import { config, readJson, writeJson, log } from './config.js';
+import zlib from 'node:zlib';
+import { execFile, spawnSync } from 'node:child_process';
+import { config, readJson, writeJson, log, PKG_DIR } from './config.js';
 
 const LOCK_FILE = () => path.join(config.stateDir, 'sources.lock.json');
 const CHECK_FILE = () => path.join(config.stateDir, 'update-check.json');
 const MUTEX_FILE = () => path.join(config.stateDir, 'update.mutex');
+export const SNAPSHOT_DIR = path.join(PKG_DIR, 'snapshot');
 
 // Abort a transfer that stalls below 1 KB/s for a minute instead of hanging until a timeout.
 const GIT_NET = ['-c', 'http.lowSpeedLimit=1000', '-c', 'http.lowSpeedTime=60'];
@@ -107,7 +110,8 @@ async function commitInfo(dir, rev) {
 }
 
 async function cloneSource(src) {
-  const dir = sourceDir(src.id);
+  // Download next to the current copy (bundled snapshot or nothing) and swap only a complete checkout in.
+  const dir = `${sourceDir(src.id)}.new`;
   // an interrupted clone of the same repo keeps the blobs it already has
   const url = await git(['-C', dir, 'config', 'remote.origin.url']).catch(() => null);
   if (url !== src.repo) {
@@ -129,7 +133,52 @@ async function cloneSource(src) {
     await retry(() => applySparse(dir, [...include.slice(0, i), ...exclude]));
   }
   await compact(dir);
+  const final = sourceDir(src.id);
+  const old = `${final}.old`;
+  fs.rmSync(old, { recursive: true, force: true });
+  if (fs.existsSync(final)) fs.renameSync(final, old);
+  try { fs.renameSync(dir, final); } catch (e) { if (fs.existsSync(old)) fs.renameSync(old, final); throw e; }
+  fs.rmSync(old, { recursive: true, force: true });
   return sha;
+}
+
+/** Commit the source's ref points to upstream, without downloading anything. */
+async function remoteCommit(src) {
+  const ref = src.ref || 'HEAD';
+  if (/^[0-9a-f]{40}$/i.test(ref)) return ref;
+  const lines = (await git(['ls-remote', src.repo, ref, `${ref}^{}`])).split('\n').filter(Boolean);
+  // an annotated tag lists the tag object and then the commit it points to (^{})
+  const line = lines.find((l) => l.endsWith('^{}')) || lines[0];
+  if (!line) throw new Error(`ref ${ref} not found in ${src.repo}`);
+  return line.split('\t')[0];
+}
+
+/**
+ * First run: unpack the copy bundled with the plugin (snapshot/<id>.tar.br), so the catalog works at once
+ * without GitHub. Synchronous on purpose — it takes about a second and the catalog must not be read empty.
+ */
+export function seedSnapshots() {
+  const manifest = readJson(path.join(SNAPSHOT_DIR, 'manifest.json'), {});
+  const lock = readLock();
+  for (const src of enabledSources()) {
+    const snap = manifest[src.id];
+    const file = path.join(SNAPSHOT_DIR, `${src.id}.tar.br`);
+    // only a copy cut from the same repo, ref and filter as sources.json asks for
+    if (lock[src.id] || !snap || snap.repo !== src.repo || snap.ref !== src.ref
+      || JSON.stringify(snap.sparse) !== JSON.stringify(src.sparse) || !fs.existsSync(file)) continue;
+    const dir = sourceDir(src.id);
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir, { recursive: true });
+    // cwd instead of -C: GNU tar (Git Bash) reads a "C:" path as a remote host
+    const r = spawnSync('tar', ['-xf', '-'], { cwd: dir, input: zlib.brotliDecompressSync(fs.readFileSync(file)) });
+    if (r.status !== 0) {
+      log(`unpacking the bundled ${src.id} failed: ${r.error?.message || String(r.stderr).trim()}`);
+      fs.rmSync(dir, { recursive: true, force: true });
+      continue;
+    }
+    lock[src.id] = { ref: src.ref, commit: snap.commit, previous: null, updatedAt: new Date().toISOString(), commitDate: snap.commitDate, subject: snap.subject, snapshot: true };
+    writeLock(lock);
+  }
 }
 
 // The lock entry is written only after a complete checkout, so an interrupted clone is retried.
@@ -147,6 +196,7 @@ export function ensureSources(opts) {
 }
 
 async function cloneMissing({ onProgress, onCloned } = {}) {
+  seedSnapshots();
   const done = [];
   const errors = [];
   for (const src of enabledSources()) {
@@ -158,6 +208,13 @@ async function cloneMissing({ onProgress, onCloned } = {}) {
         try { await applySparse(sourceDir(src.id), patterns); await compact(sourceDir(src.id)); } catch (e) { errors.push(`${src.id}: ${e.message}`); }
       }
       continue;
+    }
+    const snap = readLock()[src.id];
+    if (snap?.snapshot) {
+      // the bundled copy stays until upstream moves on; then the newer version is downloaded in the background
+      try {
+        if (await remoteCommit(src) === snap.commit) continue;
+      } catch (e) { errors.push(`${src.id}: ${e.message}`); continue; }
     }
     onProgress?.(`cloning ${src.id} from ${src.repo}`);
     try {
@@ -221,6 +278,8 @@ export async function checkUpdates({ ids } = {}) {
   const results = [];
   for (const src of enabledSources()) {
     if (ids?.length && !ids.includes(src.id)) continue;
+    // ensureSources() already compared a bundled copy with upstream and replaced it if it was behind
+    if (lock[src.id]?.snapshot) { results.push({ id: src.id, upToDate: true, commit: lock[src.id].commit.slice(0, 10) }); continue; }
     const dir = sourceDir(src.id);
     try {
       const head = await git(['-C', dir, 'rev-parse', 'HEAD']);
@@ -257,6 +316,7 @@ export async function applyUpdates({ ids } = {}) {
     const results = [];
     for (const src of enabledSources()) {
       if (ids?.length && !ids.includes(src.id)) continue;
+      if (lock[src.id]?.snapshot) { results.push({ id: src.id, upToDate: true }); continue; }
       const dir = sourceDir(src.id);
       try {
         const head = await git(['-C', dir, 'rev-parse', 'HEAD']);
@@ -313,7 +373,7 @@ export function sourcesStatus() {
     const c = check?.results?.find((r) => r.id === s.id);
     return {
       id: s.id, repo: s.repo, ref: s.ref, enabled: s.enabled !== false, cloned: isCloned(s.id), license: s.license,
-      commit: l?.commit?.slice(0, 10) ?? null, commitDate: l?.commitDate ?? null, updatedAt: l?.updatedAt ?? null,
+      snapshot: Boolean(l?.snapshot), commit: l?.commit?.slice(0, 10) ?? null, commitDate: l?.commitDate ?? null, updatedAt: l?.updatedAt ?? null,
       canRollback: Boolean(l?.previous),
       updateAvailable: c ? (c.upToDate === false) : null,
     };
