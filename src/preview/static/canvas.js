@@ -55,6 +55,7 @@
       if (hashNode && knownNodes.has(hashNode)) { select(hashNode); zoomTo([hashNode]); }
       else if (project.selected && knownNodes.has(project.selected)) { select(project.selected); fitAll(); }
       else fitAll();
+      firstFit = false;
     } else if (newOnes.length) {
       for (const n of newOnes) flash(n.id);
       const offscreen = newOnes.filter((n) => !onScreen(n.id));
@@ -170,11 +171,33 @@
   let linkTimer = null;
   function drawLinksLight() { clearTimeout(linkTimer); linkTimer = setTimeout(() => drawLinks(project.nodes), 60); }
 
-  function zoomAt(factor, cx, cy) {
-    const s = Math.min(2, Math.max(0.03, view.s * factor));
-    const k = s / view.s;
-    view = { s, x: cx - (cx - view.x) * k, y: cy - (cy - view.y) * k };
+  // Zoom eases toward a target instead of jumping. will-change is set only while animating:
+  // a permanently promoted layer is rasterized once and then stretched, which blurs the frames.
+  let anim = null; // { s, cx, cy } zoom around a screen point, or { s, x, y } fly to a view
+  let raf = 0;
+  const clampS = (s) => Math.min(2, Math.max(0.03, s));
+  function animate(target) {
+    anim = target;
+    world.style.willChange = 'transform';
+    if (!raf) raf = requestAnimationFrame(tick);
+  }
+  function stopAnim() { anim = null; cancelAnimationFrame(raf); raf = 0; world.style.willChange = ''; }
+  function tick() {
+    raf = 0;
+    if (!anim) return;
+    const ls = Math.log(view.s); const lt = Math.log(anim.s);
+    const anchored = anim.cx !== undefined;
+    const done = Math.abs(lt - ls) < 0.003 && (anchored || Math.hypot(anim.x - view.x, anim.y - view.y) < 0.5);
+    const s = done ? anim.s : Math.exp(ls + (lt - ls) * 0.25);
+    if (anchored) { const k = s / view.s; view = { s, x: anim.cx - (anim.cx - view.x) * k, y: anim.cy - (anim.cy - view.y) * k }; }
+    else view = done ? { s, x: anim.x, y: anim.y } : { s, x: view.x + (anim.x - view.x) * 0.25, y: view.y + (anim.y - view.y) * 0.25 };
     applyView();
+    if (done) stopAnim(); else raf = requestAnimationFrame(tick);
+  }
+
+  function zoomAt(factor, cx, cy) {
+    const from = anim?.cx !== undefined ? anim.s : view.s;
+    animate({ s: clampS(from * factor), cx, cy });
   }
 
   function bbox(ids) {
@@ -190,9 +213,10 @@
     const pad = 70; const top = 110; const bottom = 170;
     const W = innerWidth - pad * 2; const H = innerHeight - top - bottom;
     const s = Math.min(maxScale, Math.max(0.03, Math.min(W / b.w, H / b.h)));
-    view = { s, x: pad + (W - b.w * s) / 2 - b.x * s, y: top + (H - b.h * s) / 2 - b.y * s };
-    applyView();
+    const to = { s, x: pad + (W - b.w * s) / 2 - b.x * s, y: top + (H - b.h * s) / 2 - b.y * s };
+    if (firstFit) { view = to; applyView(); } else animate(to);
   }
+  let firstFit = true;
   const fitAll = () => zoomTo(Object.keys(positions), 0.6);
   function onScreen(id) {
     const p = positions[id]; if (!p) return true;
@@ -200,15 +224,26 @@
     return x < innerWidth && y < innerHeight && x + p.w * view.s > 0 && y + p.h * view.s > 0;
   }
 
+  // A mouse notch is ~100px and a pinch step a few px: clamp so one notch is a ~20% step, not 2.7×.
+  const wheelZoom = (deltaY, deltaMode, cx, cy) => {
+    const d = Math.max(-20, Math.min(20, deltaY * (deltaMode === 1 ? 20 : 1)));
+    zoomAt(Math.exp(-d * 0.01), cx, cy);
+  };
+  // Ctrl/⌘+wheel anywhere zooms the canvas, never the browser page.
+  addEventListener('wheel', (e) => {
+    if (e.ctrlKey || e.metaKey) { e.preventDefault(); wheelZoom(e.deltaY, e.deltaMode, e.clientX, e.clientY); }
+  }, { passive: false });
   mat.addEventListener('wheel', (e) => {
     e.preventDefault();
-    if (e.ctrlKey || e.metaKey) zoomAt(Math.exp(-e.deltaY * 0.01), e.clientX, e.clientY);
-    else { view.x -= e.deltaX; view.y -= e.deltaY; applyView(); }
+    if (e.ctrlKey || e.metaKey) return;
+    if (anim && anim.cx === undefined) stopAnim();
+    view.x -= e.deltaX; view.y -= e.deltaY; applyView();
   }, { passive: false });
 
   let space = false;
   let panState = null;
   function startPan(e) {
+    if (anim && anim.cx === undefined) stopAnim();
     panState = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false, id: e.pointerId };
     mat.setPointerCapture?.(e.pointerId);
   }
@@ -339,6 +374,13 @@
       setPick(null);
     } else if (m.type === 'key' && m.key === 'Escape') {
       setInteract(null);
+    } else if (m.type === 'wheel-zoom' || m.type === 'key-zoom') {
+      // forwarded from inside a frame (interact/pick mode): map frame coordinates to the screen
+      const f = frames.get(m.node);
+      const r = f?.iframe.getBoundingClientRect();
+      if (!r) return;
+      if (m.type === 'key-zoom') keyZoom(m.key);
+      else wheelZoom(m.deltaY, m.deltaMode, r.left + m.x * view.s, r.top + m.y * view.s);
     }
   });
 
@@ -590,14 +632,20 @@
 
   // ---------------- keyboard ----------------
   const typing = () => ['TEXTAREA', 'INPUT', 'SELECT'].includes(document.activeElement?.tagName);
+  // Ctrl/⌘ + / − / 0 zoom the canvas instead of the browser page, even while typing.
+  function keyZoom(key) {
+    if (key === '+' || key === '=') zoomAt(1.25, innerWidth / 2, innerHeight / 2);
+    else if (key === '-') zoomAt(0.8, innerWidth / 2, innerHeight / 2);
+    else if (key === '0') fitAll();
+  }
   addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && ['+', '=', '-', '0'].includes(e.key)) { e.preventDefault(); keyZoom(e.key); return; }
     if (e.code === 'Space' && !typing()) { space = true; mat.classList.add('space'); if (!e.repeat) e.preventDefault(); }
     if (typing()) { if (e.key === 'Escape') document.activeElement.blur(); return; }
     if (e.key === 'Escape') { if (pickId) setPick(null); else if (interactId) setInteract(null); else if (picked) { picked = null; updateComposer(); } else select(null); }
     else if (e.key === '!' || (e.shiftKey && e.code === 'Digit1')) fitAll();
     else if (e.key === '@' || (e.shiftKey && e.code === 'Digit2')) { if (selectedId) zoomTo([selectedId]); }
-    else if (e.key === '+' || e.key === '=') zoomAt(1.25, innerWidth / 2, innerHeight / 2);
-    else if (e.key === '-') zoomAt(0.8, innerWidth / 2, innerHeight / 2);
+    else if (e.key === '+' || e.key === '=' || e.key === '-') keyZoom(e.key);
     else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) tools.querySelector('[data-act="delete"]').click();
     else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'd' && selectedId) { e.preventDefault(); tools.querySelector('[data-act="duplicate"]').click(); }
     else if (e.key.toLowerCase() === 'e' && selectedId) setPick(pickId ? null : selectedId);

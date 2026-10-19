@@ -55,7 +55,7 @@ button { cursor: pointer; }
 }
 #mat.panning { cursor: grabbing; }
 #mat.space { cursor: grab; }
-#world { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
+#world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 #links { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
 #links path { fill: none; stroke: rgba(255, 255, 255, .55); stroke-width: 1.5; vector-effect: non-scaling-stroke; stroke-dasharray: 5 5; }
 #links circle { fill: var(--mat); stroke: rgba(255, 255, 255, .7); stroke-width: 1.5; vector-effect: non-scaling-stroke; }

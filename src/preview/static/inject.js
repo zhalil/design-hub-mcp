@@ -111,6 +111,15 @@
   }
 
   addEventListener('keydown', onKey, true);
+  // Ctrl/⌘ zoom inside a frame belongs to the canvas, not to the browser page
+  addEventListener('wheel', (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    post({ type: 'wheel-zoom', deltaY: e.deltaY, deltaMode: e.deltaMode, x: e.clientX, y: e.clientY });
+  }, { passive: false, capture: true });
+  addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && ['+', '=', '-', '0'].includes(e.key)) { e.preventDefault(); post({ type: 'key-zoom', key: e.key }); }
+  }, true);
   addEventListener('message', (e) => {
     const m = e.data;
     if (!m || m.dh !== true) return;
