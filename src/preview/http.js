@@ -20,7 +20,7 @@ const MIME = {
 };
 
 const state = {
-  server: null, port: null, baseUrl: null,
+  server: null, watcher: null, port: null, baseUrl: null,
   sse: new Set(),            // { res, slug }
   waiters: new Map(),        // slug -> number of Claude sessions waiting for feedback
   mtimes: new Map(),         // "slug/nodeId" -> mtimeMs, for edits made directly on disk
@@ -60,7 +60,8 @@ function nodeMtime(slug, node) {
 async function projectPayload(slug) {
   const p = ws.loadProject(slug);
   for (const n of p.nodes) n.mtime = nodeMtime(slug, n);
-  return { ...p, listening: (state.waiters.get(slug) || 0) > 0, dir: ws.projectDir(slug), runner: await runner.runnerInfo(slug) };
+  const { trash, ...rest } = p;
+  return { ...rest, listening: (state.waiters.get(slug) || 0) > 0, dir: ws.projectDir(slug), runner: await runner.runnerInfo(slug) };
 }
 
 async function handleMcp(req, res) {
@@ -97,6 +98,7 @@ function startWatching() {
   try {
     const w = fs.watch(config.workspace, { recursive: true }, (_e, f) => onFile(f?.toString()));
     w.on('error', () => {});
+    state.watcher = w;
   } catch { /* polling below covers it */ }
   setInterval(() => {
     const slugs = new Set([...state.sse].map((c) => c.slug).filter(Boolean));
@@ -236,6 +238,13 @@ async function handle(req, res) {
       if (section === 'nodes' && id && action === 'duplicate') { const { node } = ws.duplicateNode(slug, id); return send(res, 201, node); }
       if (section === 'nodes' && id && req.method === 'DELETE') { ws.deleteNode(slug, id); return send(res, 200, { ok: true }); }
       if (section === 'nodes' && id && req.method === 'PATCH') { ws.updateNodeMeta(slug, id, body); return send(res, 200, { ok: true }); }
+      if (section === 'edges' && !id && req.method === 'POST') return send(res, 201, ws.addEdge(slug, body));
+      if (section === 'edges' && id && req.method === 'PATCH') return send(res, 200, ws.updateEdge(slug, id, body));
+      if (section === 'edges' && id && req.method === 'DELETE') return send(res, 200, ws.deleteEdge(slug, id));
+      if (section === 'notes' && !id && req.method === 'POST') return send(res, 201, ws.addNote(slug, body));
+      if (section === 'notes' && id && req.method === 'PATCH') return send(res, 200, ws.updateNote(slug, id, body));
+      if (section === 'notes' && id && req.method === 'DELETE') return send(res, 200, ws.deleteNote(slug, id));
+      if (section === 'nodes' && id && action === 'restore') return send(res, 200, ws.restoreNode(slug, id));
       if (section === 'select') { ws.selectNode(slug, body.nodeId); return send(res, 200, { ok: true }); }
       if (section === 'runner' && id === 'stop') { return send(res, 200, { stopped: runner.stop(slug) }); }
       if (section === 'runner' && id === 'run') { runner.schedule(slug, 0); return send(res, 200, { ok: true }); }
@@ -249,6 +258,13 @@ async function handle(req, res) {
   } catch (e) {
     return send(res, 400, { error: e.message });
   }
+}
+
+export function stopPreview() {
+  state.watcher?.close(); state.watcher = null;
+  const s = state.server; state.server = null;
+  if (!s) return Promise.resolve();
+  return new Promise((r) => { s.close(() => r()); s.closeAllConnections(); });
 }
 
 export function startPreview() {
