@@ -228,21 +228,24 @@ import { createMinimap } from './minimap.js';
     const one = frameIds.length === 1 && !noteIds.length && project.nodes.find((n) => n.id === frameIds[0]);
     if (frameIds.length && !confirm(one ? `Delete “${one.label}”? Its file moves to the project's .trash folder.`
       : `Delete ${frameIds.length + noteIds.length} items? Design files move to the project's .trash folder.`)) return;
-    let gone = [];
-    const drop = async () => {
-      for (const id of frameIds) await api(`/nodes/${id}`, { method: 'DELETE' });
-      gone = [];
-      for (const id of noteIds) gone.push(await dropNote(id));
+    let frames = []; let gone = []; // what the last drop actually deleted: undo and redo cover only that
+    const drop = async (fIds, nIds) => {
+      frames = []; gone = [];
+      for (const id of fIds) { await api(`/nodes/${id}`, { method: 'DELETE' }); frames.push(id); }
+      for (const id of nIds) gone.push(await dropNote(id));
     };
     const label = one ? 'Delete design' : frameIds.length + noteIds.length === 1 ? 'Delete note' : `Delete ${frameIds.length + noteIds.length} items`;
-    undoable(drop, {
+    const step = {
       label,
       undo: async () => {
-        for (const id of [...frameIds].reverse()) await api(`/nodes/${id}/restore`, { method: 'POST', body: {} });
+        for (const id of [...frames].reverse()) await api(`/nodes/${id}/restore`, { method: 'POST', body: {} });
         for (const t of gone) await reviveNote(t);
       },
-      redo: drop,
-    });
+      redo: () => drop([...frames], gone.map((t) => t.id)),
+    };
+    undoable(async () => {
+      try { await drop(frameIds, noteIds); } catch (e) { if (frames.length || gone.length) e.step = step; throw e; }
+    }, step);
   }
 
   const pinPop = $('#pinned-pop');
@@ -518,14 +521,28 @@ import { createMinimap } from './minimap.js';
       }
       const back = to.map((m) => ({ ...m, pos: from.get(m.id) }));
       const label = to.length > 1 ? `Move ${to.length} items` : to[0].frame ? 'Move design' : 'Move note';
-      // done() before the refresh: a failed PATCH must not keep the items where they were dropped
-      undoable(() => moveItems(to).finally(done), { label, undo: () => moveItems(back), redo: () => moveItems(to) });
+      moveAll(to, back, label, done);
     };
     addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
   }
-  const moveItems = (list) => Promise.all(list.map(({ id, frame, pos }) => (frame
-    ? api(`/nodes/${id}`, { method: 'PATCH', body: pos })
-    : api(`/notes/${noteId(id)}`, { method: 'PATCH', body: { pos } }))));
+  // PATCHes every { id, frame, pos }; on failure the error carries `applied`, the ones that did move.
+  async function moveItems(list) {
+    const r = await Promise.allSettled(list.map(({ id, frame, pos }) => (frame
+      ? api(`/nodes/${id}`, { method: 'PATCH', body: pos })
+      : api(`/notes/${noteId(id)}`, { method: 'PATCH', body: { pos } }))));
+    const failed = r.find((x) => x.status === 'rejected');
+    if (failed) throw Object.assign(failed.reason, { applied: list.filter((_, i) => r[i].status === 'fulfilled') });
+  }
+  // One undoable move; if only some items moved, the step covers just those. `settle` runs before the refresh.
+  function moveAll(to, back, label, settle = () => {}) {
+    const stepFor = (list) => {
+      const ids = new Set(list.map((m) => m.id)); const prev = back.filter((m) => ids.has(m.id));
+      return { label, undo: () => moveItems(prev), redo: () => moveItems(list) };
+    };
+    return undoable(async () => {
+      try { await moveItems(to); } catch (e) { if (e.applied?.length) e.step = stepFor(e.applied); throw e; } finally { settle(); }
+    }, stepFor(to));
+  }
 
   function arrange() {
     if (!project || !canEdit()) return;
@@ -536,7 +553,7 @@ import { createMinimap } from './minimap.js';
       if (p && (p.x !== pos.x || p.y !== pos.y)) { to.push({ id, frame: true, pos }); back.push({ id, frame: true, pos: { x: p.x, y: p.y } }); }
     }
     if (!to.length) { showToast('Already laid out'); return; }
-    undoable(() => moveItems(to), { label: 'Auto layout', undo: () => moveItems(back), redo: () => moveItems(to) });
+    moveAll(to, back, 'Auto layout');
   }
 
   // Drag from a frame's link handle; dropping on another frame links the two.
@@ -611,9 +628,11 @@ import { createMinimap } from './minimap.js';
   // Canvas changes and undo/redo run one at a time, in order: a fast Ctrl+Z waits for the change before it.
   let queue = Promise.resolve();
   const serial = (fn) => (queue = queue.then(fn).catch((e) => showToast(e.message)));
-  // The step is pushed as soon as the server took the change, before the refresh. A failed change still
-  // refreshes, so the canvas shows what the server has.
-  const undoable = (run, step) => serial(async () => { try { await run(); history.push(step); } finally { await refresh(); } });
+  // The step is pushed as soon as the server took the change, before the refresh. A change that failed
+  // part-way pushes the step it attached to the error (`e.step`, covering what was applied) and still refreshes.
+  const undoable = (run, step) => serial(async () => {
+    try { await run(); history.push(step); } catch (e) { if (e.step) history.push(e.step); throw e; } finally { await refresh(); }
+  });
   function undoRedo(redo) {
     if (!canEdit()) return;
     serial(async () => {
