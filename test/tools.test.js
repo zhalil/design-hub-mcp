@@ -66,3 +66,11 @@ test('runner prompt includes pinned context and truncates at 12000', () => {
   assert.ok(section.endsWith('… (truncated, see project_get context)'));
   assert.ok(section.length <= 12000);
 });
+
+test('canvas_note near a node with an unknown viewport falls back to desktop width', async () => {
+  const { slug } = ws.createProject({ name: 'V' });
+  const a = ws.writeNode(slug, { html: '<p>a</p>', viewport: 'watch' }).node.id;
+  ws.updateNodeMeta(slug, a, { x: 0, y: 0 });
+  const { note } = await call('canvas_note', { project: slug, text: 'x', near: a });
+  assert.deepEqual(note.pos, { x: 1440 + 48, y: 0 });
+});

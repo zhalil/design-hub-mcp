@@ -107,3 +107,41 @@ test('addRequest next-page keeps label', () => {
   const r = ws.addRequest(slug, { type: 'next-page', nodeId: a, label: 'Pricing' });
   assert.equal(r.label, 'Pricing');
 });
+
+test('updateNodeMeta with null x/y clears pos; unknown viewport rejected', () => {
+  const { slug, a } = setup();
+  ws.updateNodeMeta(slug, a, { x: 10, y: 20 });
+  assert.deepEqual(ws.getNode(ws.loadProject(slug), a).pos, { x: 10, y: 20 });
+  ws.updateNodeMeta(slug, a, { x: null, y: null });
+  assert.equal('pos' in ws.getNode(ws.loadProject(slug), a), false);
+  assert.throws(() => ws.updateNodeMeta(slug, a, { viewport: 'watch' }), /viewport/);
+});
+
+test('writeNode linkFrom: existing edge is not duplicated, returned project has the edge', () => {
+  const { slug, a, b } = setup();
+  ws.addEdge(slug, { from: a, to: b });
+  const { project } = ws.writeNode(slug, { html: 'x', node: b, linkFrom: a });
+  assert.equal(project.edges.filter((e) => e.from === a && e.to === b).length, 1);
+  assert.equal(ws.loadProject(slug).edges.length, 1);
+  const r = ws.writeNode(slug, { html: 'y', linkFrom: a });
+  assert.ok(r.project.edges.some((e) => e.from === a && e.to === r.node.id));
+});
+
+test('writeNode linkFrom self or unknown throws before writing', () => {
+  const { slug, a } = setup();
+  const file = ws.nodeFile(slug, ws.getNode(ws.loadProject(slug), a));
+  assert.throws(() => ws.writeNode(slug, { html: 'changed', node: a, linkFrom: a }), /itself/);
+  assert.throws(() => ws.writeNode(slug, { html: 'changed', node: a, linkFrom: 'nope' }));
+  assert.equal(ws.getNode(ws.loadProject(slug), a).revision, 1);
+  assert.equal(fs.readFileSync(file, 'utf8'), '<p>a</p>');
+});
+
+test('updateNote coerces text/pinned; updateEdge caps label', () => {
+  const { slug, a, b } = setup();
+  const n = ws.addNote(slug, { text: 'hi' });
+  const u = ws.updateNote(slug, n.id, { text: 42, pinned: 'yes' });
+  assert.equal(u.text, '42');
+  assert.equal(u.pinned, true);
+  const e = ws.addEdge(slug, { from: a, to: b });
+  assert.equal(ws.updateEdge(slug, e.id, { label: 'x'.repeat(500) }).label.length, 120);
+});

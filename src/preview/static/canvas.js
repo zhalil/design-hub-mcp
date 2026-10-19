@@ -493,6 +493,7 @@ import { createMinimap } from './minimap.js';
     if (mode !== 'edit') { startPan(e); return; }
     const from = new Map([...selection].filter(rectOf).map((x) => [x, { x: rectOf(x).x, y: rectOf(x).y }]));
     const isFrame = new Map([...from.keys()].map((x) => [x, Boolean(positions[x])]));
+    const placed = new Set([...from.keys()].filter((x) => (project.nodes.find((n) => n.id === x) || note(x))?.pos)); // undo puts the rest back to auto-placed
     const start = { x: e.clientX, y: e.clientY };
     const drag = new Map();
     dragging = drag;
@@ -519,7 +520,7 @@ import { createMinimap } from './minimap.js';
         else if (inSelection && ev.type !== 'pointercancel') select(id); // a click inside a multi-selection narrows it
         return;
       }
-      const back = to.map((m) => ({ ...m, pos: from.get(m.id) }));
+      const back = to.map((m) => ({ ...m, pos: placed.has(m.id) ? from.get(m.id) : null }));
       const label = to.length > 1 ? `Move ${to.length} items` : to[0].frame ? 'Move design' : 'Move note';
       moveAll(to, back, label, done);
     };
@@ -528,7 +529,7 @@ import { createMinimap } from './minimap.js';
   // PATCHes every { id, frame, pos }; on failure the error carries `applied`, the ones that did move.
   async function moveItems(list) {
     const r = await Promise.allSettled(list.map(({ id, frame, pos }) => (frame
-      ? api(`/nodes/${id}`, { method: 'PATCH', body: pos })
+      ? api(`/nodes/${id}`, { method: 'PATCH', body: pos || { x: null, y: null } })
       : api(`/notes/${noteId(id)}`, { method: 'PATCH', body: { pos } }))));
     const failed = r.find((x) => x.status === 'rejected');
     if (failed) throw Object.assign(failed.reason, { applied: list.filter((_, i) => r[i].status === 'fulfilled') });
@@ -550,7 +551,7 @@ import { createMinimap } from './minimap.js';
     const to = []; const back = [];
     for (const [id, pos] of Object.entries(next)) {
       const p = positions[id];
-      if (p && (p.x !== pos.x || p.y !== pos.y)) { to.push({ id, frame: true, pos }); back.push({ id, frame: true, pos: { x: p.x, y: p.y } }); }
+      if (p && (p.x !== pos.x || p.y !== pos.y)) { to.push({ id, frame: true, pos }); back.push({ id, frame: true, pos: project.nodes.find((n) => n.id === id)?.pos ? { x: p.x, y: p.y } : null }); }
     }
     if (!to.length) { showToast('Already laid out'); return; }
     moveAll(to, back, 'Auto layout');
@@ -680,9 +681,11 @@ import { createMinimap } from './minimap.js';
   function setSelection(ids) {
     if (edgeSel) markEdge(null);
     if (ids.length === selection.size && ids.every((x) => selection.has(x))) return;
+    const was = primary();
     selection.clear();
     for (const x of ids) selection.add(x);
     if (picked && picked.nodeId !== primary()) picked = null;
+    if (was !== primary()) closeMenus();
     for (const [fid, f] of frames) f.el.classList.toggle('selected', selection.has(fid));
     for (const [nid, el] of noteEls) el.classList.toggle('selected', selection.has(nid));
     placeTools();
@@ -770,6 +773,7 @@ import { createMinimap } from './minimap.js';
     if (b?.dataset.act === 'link') { const two = pair(); if (two) linkFrames(two[0], two[1]); return; }
     if (!b || !id) return;
     if (b.dataset.vp) {
+      if (!canEdit()) return;
       const n = project.nodes.find((x) => x.id === id); n.viewport = b.dataset.vp;
       layoutAndRender();
       return api(`/nodes/${id}`, { method: 'PATCH', body: { viewport: b.dataset.vp } }).catch((er) => showToast(er.message));
@@ -790,7 +794,9 @@ import { createMinimap } from './minimap.js';
       else if (act === 'copy-prompt') { closeMenus(); $('#copy-prompt').click(); }
       else if (act === 'copy-html') {
         closeMenus();
-        const html = await (await fetch(`/f/${encodeURIComponent(slug)}/${targetNode().file}`)).text();
+        const res = await fetch(`/f/${encodeURIComponent(slug)}/${targetNode().file}`);
+        if (!res.ok) throw new Error(`Copy HTML failed: HTTP ${res.status}`);
+        const html = await res.text();
         await navigator.clipboard.writeText(html); showToast('HTML copied');
       }
       else if (act === 'open') closeMenus();
@@ -965,7 +971,7 @@ import { createMinimap } from './minimap.js';
   };
 
   // ---------------- activity ----------------
-  const TYPE_LABEL = { iterate: 'Iterate', element: 'Element change', variations: 'Variations', comment: 'Comment', pick: 'Chosen' };
+  const TYPE_LABEL = { iterate: 'Iterate', element: 'Element change', variations: 'Variations', comment: 'Comment', pick: 'Chosen', 'next-page': 'Next page' };
   const STATUS_LABEL = { pending: 'Queued', claimed: 'Claude is working', done: 'Done', dismissed: 'Dismissed', failed: 'Not done' };
 
   function renderActivity() {
@@ -984,6 +990,7 @@ import { createMinimap } from './minimap.js';
       const meta = li.querySelector('.req-meta');
       meta.append(node ? `on ${node.label}` : 'new design');
       if (r.element) meta.append(` · ${r.element.label}`);
+      if (r.label) meta.append(` · ${r.label}`);
       if (r.status === 'pending') {
         const b = document.createElement('button'); b.className = 'linkish'; b.textContent = 'Cancel';
         b.onclick = () => api(`/requests/${r.id}/dismiss`, { method: 'POST', body: {} }).catch((e) => showToast(e.message));

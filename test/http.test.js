@@ -43,5 +43,11 @@ test('edges, notes and restore endpoints', async () => {
   assert.ok(!(await call('GET', base)).json.nodes.some((x) => x.id === a));
   const r = await call('POST', `${base}/nodes/${a}/restore`);
   assert.equal(r.status, 200);
-  assert.ok((await call('GET', base)).json.nodes.some((x) => x.id === a));
+  const back = (await call('GET', base)).json;
+  assert.ok(back.nodes.some((x) => x.id === a));
+  assert.deepEqual(back.edges.map((x) => [x.from, x.to]), [[a, b]]);
+
+  await call('PATCH', `${base}/nodes/${b}`, { x: 5, y: 6 });
+  await call('PATCH', `${base}/nodes/${b}`, { x: null, y: null });
+  assert.equal('pos' in (await call('GET', base)).json.nodes.find((x) => x.id === b), false);
 });

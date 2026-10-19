@@ -79,7 +79,8 @@ function connect(proc) {
     const msgs = (buf + d).split('\0');
     buf = msgs.pop();
     for (const s of msgs) {
-      const m = JSON.parse(s);
+      let m;
+      try { m = JSON.parse(s); } catch { continue; } // ignore a garbled frame
       if (!m.id) { for (const l of listeners) l(m); continue; }
       const p = pending.get(m.id);
       pending.delete(m.id);
@@ -143,7 +144,8 @@ export async function browserAvailable() {
 async function withPage(url, viewport, fn) {
   const browser = await getBrowser();
   const vp = VIEWPORTS[viewport] || VIEWPORTS.desktop;
-  const { targetId } = await browser.send('Target.createTarget', { url: 'about:blank' });
+  const { browserContextId } = await browser.send('Target.createBrowserContext'); // own cookies/storage per page
+  let targetId;
   const consoleErrors = [];
   const failedRequests = [];
   const requestUrls = new Map();
@@ -164,6 +166,7 @@ async function withPage(url, viewport, fn) {
   browser.listeners.add(onEvent);
   let timer;
   try {
+    ({ targetId } = await browser.send('Target.createTarget', { url: 'about:blank', browserContextId }));
     ({ sessionId } = await browser.send('Target.attachToTarget', { targetId, flatten: true }));
     const send = (method, params) => browser.send(method, params, sessionId);
     await Promise.all(['Page.enable', 'Runtime.enable', 'Network.enable', 'Log.enable'].map((m) => send(m)));
@@ -187,6 +190,7 @@ async function withPage(url, viewport, fn) {
     clearTimeout(timer);
     browser.listeners.delete(onEvent);
     await browser.send('Target.closeTarget', { targetId }).catch(() => {});
+    await browser.send('Target.disposeBrowserContext', { browserContextId }).catch(() => {});
   }
 }
 

@@ -415,7 +415,7 @@ export function buildServer({ worker = false } = {}) {
       if (id && remove) return text({ note: ws.deleteNote(project, id) });
       if (id) return text({ note: ws.updateNote(project, id, { text: body, pinned, color }) });
       const n = near ? ws.getNode(ws.loadProject(project), near) : null;
-      const pos = n?.pos ? { x: n.pos.x + ws.VIEWPORTS[n.viewport].width + 48, y: n.pos.y } : null;
+      const pos = n?.pos ? { x: n.pos.x + (ws.VIEWPORTS[n.viewport] || ws.VIEWPORTS.desktop).width + 48, y: n.pos.y } : null;
       return text({ note: ws.addNote(project, { text: body, pinned, color, pos }) });
     });
 

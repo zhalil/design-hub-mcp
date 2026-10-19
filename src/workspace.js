@@ -87,6 +87,7 @@ export function getNode(p, id) {
 export function writeNode(slug, { html, parent = null, node = null, label, note, viewport, origin = 'agent', requestId = null, linkFrom = null, linkLabel = '' }) {
   const p = loadProject(slug);
   if (linkFrom) getNode(p, linkFrom);
+  if (linkFrom && linkFrom === node) throw new Error('An edge cannot link a node to itself.');
   const now = new Date().toISOString();
   let n;
   if (node) {
@@ -105,9 +106,9 @@ export function writeNode(slug, { html, parent = null, node = null, label, note,
   fs.mkdirSync(path.join(projectDir(slug), 'nodes'), { recursive: true });
   fs.writeFileSync(nodeFile(slug, n), html);
   if (p.status === 'ready' && !node) p.status = 'review';
+  if (linkFrom && !p.edges.some((e) => e.from === linkFrom && e.to === n.id)) p.edges.push({ id: nextId(p, 'edge', 'e'), from: linkFrom, to: n.id, label: String(linkLabel || ''), kind: 'nav' });
   save(p, node ? 'node-updated' : 'node-added');
   events.emit('node', { slug, node: n.id });
-  if (linkFrom) addEdge(slug, { from: linkFrom, to: n.id, label: linkLabel });
   return { project: p, node: n };
 }
 
@@ -162,8 +163,10 @@ export function restoreNode(slug, id) {
 export function updateNodeMeta(slug, id, patch) {
   const p = loadProject(slug);
   const n = getNode(p, id);
+  if (patch.viewport !== undefined && !VIEWPORTS[patch.viewport]) throw new Error(`viewport must be one of ${Object.keys(VIEWPORTS).join(', ')}`);
   for (const k of ['label', 'viewport', 'note']) if (patch[k] !== undefined) n[k] = patch[k];
-  if (patch.x !== undefined && patch.y !== undefined) n.pos = { x: patch.x, y: patch.y };
+  if (patch.x === null && patch.y === null) delete n.pos;
+  else if (patch.x !== undefined && patch.y !== undefined) n.pos = { x: patch.x, y: patch.y };
   return save(p, 'node-meta');
 }
 
@@ -294,7 +297,7 @@ export function addEdge(slug, { from, to, label = '' }) {
 export function updateEdge(slug, id, { label }) {
   const p = loadProject(slug);
   const e = getEdge(p, id);
-  if (label !== undefined) e.label = String(label);
+  if (label !== undefined) e.label = String(label).slice(0, 120);
   save(p, 'edge');
   return e;
 }
@@ -335,7 +338,9 @@ export function updateNote(slug, id, patch) {
   const p = loadProject(slug);
   const n = getNote(p, id);
   if (patch.color !== undefined && !NOTE_COLORS.includes(patch.color)) throw new Error(`color must be one of ${NOTE_COLORS.join(', ')}`);
-  for (const k of ['text', 'pinned', 'color', 'pos', 'size']) if (patch[k] !== undefined) n[k] = patch[k];
+  for (const k of ['color', 'pos', 'size']) if (patch[k] !== undefined) n[k] = patch[k];
+  if (patch.text !== undefined) n.text = String(patch.text);
+  if (patch.pinned !== undefined) n.pinned = !!patch.pinned;
   n.updatedAt = new Date().toISOString();
   save(p, 'note');
   return n;

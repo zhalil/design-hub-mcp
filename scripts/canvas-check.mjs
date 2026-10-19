@@ -305,13 +305,16 @@ try {
   await shiftClick(await bodyOf(c.id));
   assert.deepEqual((await selected()).sort(), [a.id, c.id].sort(), 'Shift+click adds a second frame');
   const a0 = await at(a.id); const c0 = await at(c.id);
+  const stored = JSON.stringify([await posOf(a.id), await posOf(c.id)]);
   await drag(...await labelOf(a.id), 100, 40);
   await until(async () => (await posOf(a.id))?.x !== a0.x && (await posOf(c.id))?.x !== c0.x, 'a group drag PATCHes both frames');
   const a1 = await posOf(a.id); const c1 = await posOf(c.id);
   assert.deepEqual([c1.x - c0.x, c1.y - c0.y], [a1.x - a0.x, a1.y - a0.y], 'both frames move by the same delta');
   assert.ok(a1.x % 24 === 0 && a1.y % 24 === 0, 'the grabbed frame is snapped to the grid');
   await page.keyboard.press('Control+z');
-  await until(async () => JSON.stringify([await posOf(a.id), await posOf(c.id)]) === JSON.stringify([a0, c0]), 'Ctrl+Z puts both frames back');
+  await until(async () => JSON.stringify([await posOf(a.id), await posOf(c.id)]) === stored, 'Ctrl+Z puts both frames back, auto-placed C without pos');
+  await until(async () => JSON.stringify([await at(a.id), await at(c.id)]) === JSON.stringify([a0, c0]), 'Ctrl+Z draws both frames where they were');
+  await call(`/nodes/${c.id}`, 'PATCH', c0); // pin C: the checks below expect it to stay put when A and B are restored
 
   // Shift+click a note header adds the note; a frame + note group drag moves the note by the same delta
   const g24 = (v) => Math.round(v / 24) * 24;
@@ -375,6 +378,15 @@ try {
   await page.click('#frame-tools [data-act="link"]');
   await until(async () => (await edges()).some((e) => e.from === c.id && e.to === a.id), 'Link joins the first selected frame to the second');
 
+  // undoing a move of an auto-placed frame leaves it auto-placed (no stored pos)
+  assert.equal(await posOf(b.id), undefined, 'B is auto-placed');
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => getSelection().removeAllRanges()); // the Shift+clicks above selected text: a drag on it starts a native drag
+  await drag(...await labelOf(b.id), 96, 48);
+  await until(async () => Boolean(await posOf(b.id)), 'dragging B stores its pos');
+  await page.keyboard.press('Control+z');
+  await until(async () => (await posOf(b.id)) === undefined, 'Ctrl+Z of a move leaves auto-placed B without pos');
+
   // Auto layout puts the source of a nav edge left of its target
   await call(`/nodes/${c.id}`, 'PATCH', { x: (await posOf(a.id)).x + 2400, y: 0 });
   const beforeLayout = await posOf(c.id);
@@ -383,6 +395,7 @@ try {
   await until(async () => (await posOf(c.id)).x < (await posOf(a.id)).x, 'Auto layout puts C (source) left of A (target)');
   await page.keyboard.press('Control+z');
   await until(async () => JSON.stringify(await posOf(c.id)) === JSON.stringify(beforeLayout), 'Ctrl+Z undoes the auto layout');
+  await until(async () => (await posOf(b.id)) === undefined, 'Ctrl+Z of Auto layout leaves auto-placed B without pos');
 
   // View mode: selection works, delete does not
   await page.click('#mode [data-mode="view"]');
@@ -399,6 +412,12 @@ try {
   assert.equal(dialogs, 0, 'view mode: Delete asks no confirm');
   assert.equal((await nodes()).length, count, 'view mode: Delete does not delete');
   page.off('dialog', onDialog);
+  await page.keyboard.press('Escape');
+  await page.mouse.click(...await labelOf(a.id));
+  await page.click('#frame-tools [data-vp="mobile"]');
+  assert.equal(await page.getAttribute('#frame-tools [data-vp="mobile"]', 'aria-checked'), 'false', 'view mode: a viewport button does not switch the viewport');
+  await page.waitForTimeout(300);
+  assert.equal((await nodes()).find((n) => n.id === a.id).viewport, 'desktop', 'view mode: a viewport button sends no PATCH');
   await page.click('#mode [data-mode="edit"]');
   assert.deepEqual(errors, [], 'no script errors after the selection checks');
 
@@ -428,6 +447,22 @@ try {
   await page.click('#frame-tools [data-pop="export"]');
   await page.click('#frame-tools [data-act="copy-html"]');
   await until(async () => (await page.evaluate(() => navigator.clipboard.readText())).includes('<html'), 'Export > Copy HTML puts the page HTML on the clipboard');
+  // a failed fetch shows an error, not "HTML copied"
+  await page.route('**/f/**', (r) => r.fulfill({ status: 500, body: 'nope' }));
+  await page.click('#frame-tools [data-pop="export"]');
+  await page.click('#frame-tools [data-act="copy-html"]');
+  await until(async () => /500/.test(await page.textContent('#toast')), 'Copy HTML on a failed fetch shows the error toast');
+  await page.unroute('**/f/**');
+  // an element picked inside another frame moves the selection there and closes the open popover
+  await page.click('#frame-tools [data-pop="export"]');
+  const cFrame = await (await page.$(`.frame[data-id="${c.id}"] iframe`)).contentFrame();
+  await cFrame.evaluate((id) => parent.postMessage({ dh: true, node: id, type: 'picked', element: { label: 'h1', selector: 'h1', text: 'C' } }, '*'), c.id);
+  await until(async () => (await selected()).join() === c.id, 'the picked element selects C');
+  assert.equal(await page.locator('#frame-tools [data-menu]:not([hidden])').count(), 0, 'changing the selected frame closes the popover');
+  // the Agent panel names the next-page request
+  if (await page.isHidden('#agent')) await page.click('#agent-btn');
+  const activity = await page.textContent('#requests');
+  assert.ok(activity.includes('Next page') && activity.includes('Buy') && !activity.includes('undefined'), `the Agent panel shows "Next page" and its label: ${activity}`);
   assert.deepEqual(errors, [], 'no script errors after the toolbar checks');
 
   if (process.argv[2]) {
