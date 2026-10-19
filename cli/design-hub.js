@@ -47,7 +47,7 @@ async function main() {
         const require = createRequire(import.meta.url);
         const cli = path.join(path.dirname(require.resolve('playwright-core/package.json')), 'cli.js');
         console.log('Installing headless Chromium for screenshots/lint…');
-        spawnSync(process.execPath, [cli, 'install', 'chromium'], { stdio: 'inherit' });
+        spawnSync(process.execPath, [cli, 'install', '--only-shell', 'chromium'], { stdio: 'inherit' });
       } else {
         console.log('\nScreenshots/lint use your installed Chrome or Edge. No Chrome? run: design-hub setup --browser');
       }
