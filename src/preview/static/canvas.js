@@ -160,8 +160,9 @@
   function applyView() {
     world.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.s})`;
     document.documentElement.style.setProperty('--s', view.s);
-    const minor = 100 * view.s; const major = 500 * view.s;
-    mat.style.backgroundSize = `${major}px ${major}px, ${major}px ${major}px, ${minor}px ${minor}px, ${minor}px ${minor}px`;
+    // dot grid every 24 world px, doubling when zoomed out so dots never turn into noise
+    let g = 24 * view.s; while (g < 12) g *= 2;
+    mat.style.backgroundSize = `${g}px ${g}px`;
     mat.style.backgroundPosition = `${view.x}px ${view.y}px`;
     $('#zoom-level').textContent = `${Math.round(view.s * 100)}%`;
     drawRulers();

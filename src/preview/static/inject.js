@@ -20,8 +20,8 @@
   const box = document.createElement('div');
   box.setAttribute('data-design-hub', '');
   Object.assign(box.style, {
-    position: 'fixed', pointerEvents: 'none', zIndex: 2147483647, border: '2px solid #f2c230',
-    background: 'rgba(242,194,48,.12)', borderRadius: '2px', display: 'none', transition: 'all 60ms linear',
+    position: 'fixed', pointerEvents: 'none', zIndex: 2147483647, border: '2px solid #3b82f6',
+    background: 'rgba(59,130,246,.12)', borderRadius: '2px', display: 'none', transition: 'all 60ms linear',
   });
   const tag = document.createElement('div');
   Object.assign(tag.style, {

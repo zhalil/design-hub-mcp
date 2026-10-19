@@ -11,9 +11,8 @@
   html, body { overflow: auto; height: auto; min-height: 100%; }
   body {
     background-color: var(--mat);
-    background-image: linear-gradient(var(--mat-line-strong) 1px, transparent 1px), linear-gradient(90deg, var(--mat-line-strong) 1px, transparent 1px),
-      linear-gradient(var(--mat-line) 1px, transparent 1px), linear-gradient(90deg, var(--mat-line) 1px, transparent 1px);
-    background-size: 160px 160px, 160px 160px, 32px 32px, 32px 32px;
+    background-image: radial-gradient(circle, var(--mat-dot) 1px, transparent 1.2px);
+    background-size: 24px 24px;
   }
   main { max-width: 1240px; margin: 0 auto; padding: 48px 24px 80px; }
   header.page { color: #fff; margin-bottom: 28px; display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
