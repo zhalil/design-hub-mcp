@@ -7,7 +7,12 @@
       "ref": "main",
       "enabled": true,
       "license": "Apache-2.0 (some bundled templates MIT)",
-      "sparse": ["design-systems", "design-templates", "skills", "craft"],
+      "$sparse": "design systems: only the files the catalog serves (their HTML previews are ~1500 pages). Pictures, audio, video and fonts are never checked out for any source.",
+      "sparse": [
+        "/design-systems/*/DESIGN*.md", "/design-systems/*/USAGE.md", "/design-systems/*/manifest.json",
+        "/design-systems/*/tokens.css", "/design-systems/*/tailwind-v4.css", "/design-systems/*/design-tokens.json", "/design-systems/*/components.html",
+        "design-templates", "skills", "craft", "!/design-templates/*/scripts/verify-output/"
+      ],
       "provides": {
         "systems": ["design-systems"],
         "templates": ["design-templates"],
@@ -21,7 +26,8 @@
       "ref": "master",
       "enabled": true,
       "license": "MIT",
-      "sparse": null,
+      "$sparse": "style specimens, showcases and demos are sample output, not part of the skill",
+      "sparse": ["/*", "!/assets/style-specimens/", "!/assets/showcases/", "!/demos/"],
       "provides": {
         "skills": ["."],
         "references": ["references", "references/modules"],

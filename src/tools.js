@@ -20,21 +20,26 @@ export const VERSION = readJson(path.join(PKG_DIR, 'package.json'), {}).version 
 // ---------- startup: sources are cloned lazily on first run ----------
 let sourcesError = null;
 let sourcesReady = null;
+let sourcesDone = false;
 export function startHub() {
   if (sourcesReady) return sourcesReady;
   ensureDirs();
-  sourcesReady = sources.ensureSources({ onProgress: (m) => log(m) })
-    .then((cloned) => { if (cloned.length) log(`cloned: ${cloned.join(', ')}`); cat.invalidateCatalog(); })
+  sourcesReady = sources.ensureSources({ onProgress: (m) => log(m), onCloned: () => cat.invalidateCatalog() })
+    .then((cloned) => { if (cloned.length) log(`cloned: ${cloned.join(', ')}`); })
     .catch((e) => { sourcesError = e; log(`source setup failed: ${e.message}`); })
     .finally(() => {
+      sourcesDone = true;
       setTimeout(() => sources.maybeBackgroundCheck(async () => { cat.invalidateCatalog(); skills.resyncInstalled(); }), 5000).unref?.();
     });
   return sourcesReady;
 }
 
 async function needSources() {
-  await startHub();
-  if (sourcesError && !cat.catalog().items.length) throw new Error(`Upstream sources are not available: ${sourcesError.message}. Check git/network and run hub_update action=apply.`);
+  // A first download over a slow link can take many minutes: answer from what is already there rather than block the tool call.
+  await Promise.race([startHub(), new Promise((r) => setTimeout(r, 20000).unref?.())]);
+  if (cat.catalog().items.length) return;
+  if (!sourcesDone) throw new Error('Upstream sources (OpenDesign, huashu-design, UI UX Pro Max) are still downloading on first run. Try again in a few minutes; hub_status shows progress.');
+  if (sourcesError) throw new Error(`Upstream sources are not available: ${sourcesError.message}. Check git/network (HTTPS_PROXY is honoured) and run hub_update action=apply.`);
 }
 
 // ---------- helpers ----------
@@ -73,7 +78,7 @@ export function buildServer({ worker = false } = {}) {
     'Start here. Returns the Design Hub pipeline: which upstream source owns which decision, conflict rules, and the step-by-step loop (direction → build → lint/critique → canvas feedback → ready).',
     {},
     async () => {
-      await startHub();
+      startHub();
       const notice = updateNotice();
       return text(`${WORKFLOW}\n## Catalog right now\n${JSON.stringify(cat.stats(), null, 1)}\nPreview: ${previewInfo().url}${notice ? `\n\n> ${notice}` : ''}`);
     });
@@ -82,13 +87,13 @@ export function buildServer({ worker = false } = {}) {
     'Status of Design Hub: preview server URL, workspace folder, upstream sources (commit, update availability), catalog counts, installed skills, rendering browser.',
     { check_browser: z.boolean().optional().describe('Also try launching the headless browser used by design_lint/design_screenshot') },
     async ({ check_browser }) => {
-      await startHub();
+      startHub();
       return text({
         version: VERSION, preview: previewInfo(), hubHome: config.hubHome, sourcesFile: config.sourcesFile,
         sources: sources.sourcesStatus(), catalog: cat.stats(), styleEngine: Boolean(uipro.engineScript()),
         installedSkills: skills.listInstalled(), lastUpdateCheck: sources.lastCheck()?.checkedAt || null,
         updateNotice: updateNotice(), browser: check_browser ? await render.browserAvailable() : 'not checked',
-        sourcesError: sourcesError?.message || null,
+        sourcesDownloading: !sourcesDone, sourcesError: sourcesError?.message || null,
       });
     });
 

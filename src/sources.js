@@ -10,13 +10,16 @@ const LOCK_FILE = () => path.join(config.stateDir, 'sources.lock.json');
 const CHECK_FILE = () => path.join(config.stateDir, 'update-check.json');
 const MUTEX_FILE = () => path.join(config.stateDir, 'update.mutex');
 
+// Abort a transfer that stalls below 1 KB/s for a minute instead of hanging until a timeout.
+const GIT_NET = ['-c', 'http.lowSpeedLimit=1000', '-c', 'http.lowSpeedTime=60'];
+
 function git(args, opts = {}) {
   return new Promise((resolve, reject) => {
-    execFile('git', args, { timeout: opts.timeout ?? 180000, maxBuffer: 64 * 1024 * 1024, cwd: opts.cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } },
+    execFile('git', [...GIT_NET, ...args], { timeout: opts.timeout ?? 180000, maxBuffer: 64 * 1024 * 1024, cwd: opts.cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } },
       (err, stdout, stderr) => {
         if (err) {
           const msg = (stderr || err.message || '').trim().split('\n').slice(-3).join(' | ');
-          reject(new Error(`git ${args.slice(0, 3).join(' ')} failed: ${msg}`));
+          reject(new Error(`git ${args.slice(0, 4).join(' ')} failed: ${msg}`));
         } else resolve(stdout.trim());
       });
   });
@@ -57,14 +60,34 @@ async function withMutex(fn) {
   try { return await fn(); } finally { fs.rmSync(file, { force: true }); }
 }
 
-async function applySparse(dir, src) {
-  if (Array.isArray(src.sparse) && src.sparse.length) {
-    await git(['-C', dir, 'sparse-checkout', 'init', '--cone']);
-    await git(['-C', dir, 'sparse-checkout', 'set', ...src.sparse]);
-  } else {
-    await git(['-C', dir, 'sparse-checkout', 'disable']).catch(() => {});
+/** Retry flaky network steps: blobs fetched by a finished attempt stay in the repo. */
+async function retry(fn, tries = 3) {
+  for (let i = 1; ; i++) {
+    try { return await fn(); } catch (e) {
+      if (i >= tries) throw e;
+      log(`${e.message} — retry ${i}/${tries - 1}`);
+    }
   }
 }
+
+// Pictures, sound, video, fonts and archives feed neither the catalog nor the skills' text: never check them out.
+const MEDIA = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'ico', 'psd', 'mp3', 'wav', 'ogg', 'm4a', 'mp4', 'mov', 'webm',
+  'woff', 'woff2', 'ttf', 'otf', 'eot', 'zip', 'gz', 'tgz', 'pdf'].flatMap((e) => [`!*.${e}`, `!*.${e.toUpperCase()}`]);
+
+// `sparse` entries are directories ("skills") or gitignore-style patterns ("/x/*/DESIGN.md", "!/demos/").
+// Returns the include patterns and the exclude patterns (always ending with MEDIA).
+function sparseSpec(src) {
+  const list = Array.isArray(src.sparse) && src.sparse.length ? src.sparse : ['/*'];
+  const include = list.filter((p) => !p.startsWith('!')).map((p) => (/^\/|[*?]/.test(p) ? p : `/${p.replace(/\/$/, '')}/`));
+  return { include, exclude: [...list.filter((p) => p.startsWith('!')), ...MEDIA] };
+}
+
+async function applySparse(dir, patterns) {
+  await git(['-C', dir, 'sparse-checkout', 'set', '--no-cone', ...patterns], { timeout: 0 });
+}
+
+const samePatterns = async (dir, patterns) =>
+  (await git(['-C', dir, 'sparse-checkout', 'list']).catch(() => '')) === patterns.join('\n');
 
 async function fetchRef(dir, ref) {
   await git(['-C', dir, 'fetch', '--quiet', '--depth', '1', '--filter=blob:none', 'origin', ref], { timeout: 600000 });
@@ -79,37 +102,71 @@ async function commitInfo(dir, rev) {
 
 async function cloneSource(src) {
   const dir = sourceDir(src.id);
-  fs.rmSync(dir, { recursive: true, force: true });
-  fs.mkdirSync(dir, { recursive: true });
-  await git(['init', '--quiet', dir]);
-  await git(['-C', dir, 'remote', 'add', 'origin', src.repo]);
-  await git(['-C', dir, 'config', 'remote.origin.promisor', 'true']);
-  await git(['-C', dir, 'config', 'remote.origin.partialclonefilter', 'blob:none']);
-  // deep template paths exceed Windows' 260-char limit without this
-  if (process.platform === 'win32') await git(['-C', dir, 'config', 'core.longpaths', 'true']);
-  await applySparse(dir, src);
-  const sha = await fetchRef(dir, src.ref || 'HEAD');
-  await git(['-C', dir, 'checkout', '--quiet', '--detach', sha], { timeout: 600000 });
+  // an interrupted clone of the same repo keeps the blobs it already has
+  const url = await git(['-C', dir, 'config', 'remote.origin.url']).catch(() => null);
+  if (url !== src.repo) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir, { recursive: true });
+    await git(['init', '--quiet', dir]);
+    await git(['-C', dir, 'remote', 'add', 'origin', src.repo]);
+    await git(['-C', dir, 'config', 'remote.origin.promisor', 'true']);
+    await git(['-C', dir, 'config', 'remote.origin.partialclonefilter', 'blob:none']);
+    // deep template paths exceed Windows' 260-char limit without this
+    if (process.platform === 'win32') await git(['-C', dir, 'config', 'core.longpaths', 'true']);
+  }
+  const sha = await retry(() => fetchRef(dir, src.ref || 'HEAD'));
+  // Check out one include pattern at a time so a dropped connection costs one directory, not the whole repo.
+  const { include, exclude } = sparseSpec(src);
+  await applySparse(dir, [include[0], ...exclude]);
+  await retry(() => git(['-C', dir, 'checkout', '--quiet', '--force', '--detach', sha], { timeout: 0 }));
+  for (let i = 2; i <= include.length; i++) {
+    await retry(() => applySparse(dir, [...include.slice(0, i), ...exclude]));
+  }
   return sha;
 }
 
+// The lock entry is written only after a complete checkout, so an interrupted clone is retried.
 function isCloned(id) {
-  return fs.existsSync(path.join(sourceDir(id), '.git'));
+  return fs.existsSync(path.join(sourceDir(id), '.git')) && Boolean(readLock()[id]?.commit);
 }
 
-/** Clone every enabled source that is missing. */
-export async function ensureSources({ onProgress } = {}) {
-  const lock = readLock();
+let ensuring = null;
+
+/** Clone every enabled source that is missing. One failing source does not stop the others. */
+export function ensureSources(opts) {
+  // startup and hub_update can both ask at once; never clone the same source twice in parallel
+  ensuring ??= cloneMissing(opts).finally(() => { ensuring = null; });
+  return ensuring;
+}
+
+async function cloneMissing({ onProgress, onCloned } = {}) {
   const done = [];
+  const errors = [];
   for (const src of enabledSources()) {
-    if (isCloned(src.id)) continue;
+    if (isCloned(src.id)) {
+      // sources.json changed what to keep: re-filter the existing checkout (drops files locally, fetches only new ones)
+      const { include, exclude } = sparseSpec(src);
+      const patterns = [...include, ...exclude];
+      if (!(await samePatterns(sourceDir(src.id), patterns))) {
+        try { await applySparse(sourceDir(src.id), patterns); } catch (e) { errors.push(`${src.id}: ${e.message}`); }
+      }
+      continue;
+    }
     onProgress?.(`cloning ${src.id} from ${src.repo}`);
-    const sha = await cloneSource(src);
-    const info = await commitInfo(sourceDir(src.id), sha);
-    lock[src.id] = { ref: src.ref, commit: sha, previous: null, updatedAt: new Date().toISOString(), commitDate: info.date, subject: info.subject };
-    writeLock(lock);
-    done.push(src.id);
+    try {
+      const sha = await cloneSource(src);
+      const info = await commitInfo(sourceDir(src.id), sha);
+      const lock = readLock();
+      lock[src.id] = { ref: src.ref, commit: sha, previous: null, updatedAt: new Date().toISOString(), commitDate: info.date, subject: info.subject };
+      writeLock(lock);
+      done.push(src.id);
+      onCloned?.(src.id);
+    } catch (e) {
+      errors.push(`${src.id}: ${e.message}`);
+      onProgress?.(`cloning ${src.id} failed: ${e.message}`);
+    }
   }
+  if (errors.length) throw new Error(errors.join('; '));
   return done;
 }
 
@@ -165,7 +222,7 @@ export async function checkUpdates({ ids } = {}) {
         results.push({ id: src.id, upToDate: true, commit: head.slice(0, 10) });
         continue;
       }
-      const scope = Array.isArray(src.sparse) && src.sparse.length ? src.sparse : ['.'];
+      const scope = sparseSpec(src).include.map((p) => (p === '/*' ? '.' : `:(glob)${p.replace(/^\//, '').replace(/\/$/, '/**')}`));
       const diff = await git(['-C', dir, 'diff', '--no-renames', '--name-status', head, remote, '--', ...scope]);
       const info = await commitInfo(dir, remote);
       results.push({
@@ -196,10 +253,11 @@ export async function applyUpdates({ ids } = {}) {
       const dir = sourceDir(src.id);
       try {
         const head = await git(['-C', dir, 'rev-parse', 'HEAD']);
-        await applySparse(dir, src);
-        const remote = await fetchRef(dir, src.ref || 'HEAD');
+        const { include, exclude } = sparseSpec(src);
+        await applySparse(dir, [...include, ...exclude]);
+        const remote = await retry(() => fetchRef(dir, src.ref || 'HEAD'));
         if (remote === head) { results.push({ id: src.id, upToDate: true }); continue; }
-        await git(['-C', dir, 'checkout', '--quiet', '--force', '--detach', remote], { timeout: 600000 });
+        await retry(() => git(['-C', dir, 'checkout', '--quiet', '--force', '--detach', remote], { timeout: 0 }));
         const info = await commitInfo(dir, remote);
         lock[src.id] = { ref: src.ref, commit: remote, previous: head, updatedAt: new Date().toISOString(), commitDate: info.date, subject: info.subject };
         writeLock(lock);
@@ -226,7 +284,7 @@ export async function rollback({ ids } = {}) {
       const dir = sourceDir(src.id);
       try {
         await git(['-C', dir, 'cat-file', '-e', `${entry.previous}^{commit}`]).catch(() => fetchRef(dir, entry.previous));
-        await git(['-C', dir, 'checkout', '--quiet', '--force', '--detach', entry.previous], { timeout: 600000 });
+        await retry(() => git(['-C', dir, 'checkout', '--quiet', '--force', '--detach', entry.previous], { timeout: 0 }));
         const info = await commitInfo(dir, entry.previous);
         lock[src.id] = { ...entry, commit: entry.previous, previous: entry.commit, updatedAt: new Date().toISOString(), commitDate: info.date, subject: info.subject, rolledBack: true };
         writeLock(lock);
