@@ -8,7 +8,8 @@
     "setup": "node cli/design-hub.js setup",
     "update": "node cli/design-hub.js update",
     "preview": "node cli/design-hub.js serve --open",
-    "test": "node --test test/"
+    "test": "node --test test/",
+    "check:canvas": "node scripts/canvas-check.mjs"
   },
   "license": "MIT",
   "dependencies": {

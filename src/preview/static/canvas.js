@@ -1,10 +1,15 @@
 // Design Hub canvas: infinite pan/zoom mat with live design frames laid out as iteration trees.
+import { computeLayout } from './layout.js';
+import { createHistory } from './history.js';
+import { createMinimap } from './minimap.js';
+
 (() => {
   const slug = decodeURIComponent(location.pathname.split('/')[2] || '');
   const VP = { mobile: { w: 390, h: 844 }, tablet: { w: 820, h: 1180 }, desktop: { w: 1440, h: 900 } };
   const GAP_X = 140;
   const GAP_Y = 220;
   const MAX_FULL_H = 6000;
+  const AGENT_W = 372;          // Agent panel width plus its gap, keep in sync with canvas.css
 
   const $ = (s) => document.querySelector(s);
   const mat = $('#mat'); const world = $('#world'); const links = $('#links');
@@ -12,7 +17,10 @@
 
   let project = null;
   let view = { x: 120, y: 160, s: 0.3 };
-  let selectedId = null;
+  const selection = new Set();  // selected node and note ids
+  const primary = () => (selection.size === 1 && positions[[...selection][0]] ? [...selection][0] : null);
+  const history = createHistory();
+  let tool = 'select';          // 'select' | 'hand'
   let interactId = null;
   let pickId = null;
   let picked = null;            // { nodeId, element }
@@ -25,6 +33,13 @@
 
   function loadPref(k, d) { try { return JSON.parse(localStorage.getItem(`dh:${slug}:${k}`)) ?? d; } catch { return d; } }
   function savePref(k, v) { try { localStorage.setItem(`dh:${slug}:${k}`, JSON.stringify(v)); } catch { /* storage unavailable */ } }
+  let mode = loadPref('mode', 'edit') === 'view' ? 'view' : 'edit';
+  // View mode blocks changes to the canvas; returns true when the change may go ahead.
+  function canEdit() {
+    if (mode === 'edit') return true;
+    showToast('View mode: switch to Edit to change the canvas');
+    return false;
+  }
 
   // ---------------- data ----------------
   async function api(path, opts = {}) {
@@ -46,9 +61,13 @@
     setListening(project.listening);
     const newOnes = project.nodes.filter((n) => !knownNodes.has(n.id));
     knownNodes = new Set(project.nodes.map((n) => n.id));
-    if (selectedId && !knownNodes.has(selectedId)) selectedId = null;
+    const noteIds = new Set((project.notes || []).map((n) => n.id));
+    for (const id of selection) if (!knownNodes.has(id) && !noteIds.has(id)) selection.delete(id);
     layoutAndRender();
     renderActivity();
+    renderLayers();
+    const pinned = (project.notes || []).filter((n) => n.pinned).length;
+    $('#pinned-count').textContent = pinned; $('#pinned-count').hidden = !pinned;
     if (firstLoad) {
       firstLoad = false;
       const hashNode = location.hash.slice(1) || new URLSearchParams(location.search).get('node');
@@ -71,39 +90,10 @@
     return { w: vp.w, h };
   }
 
-  function computeLayout(nodes) {
-    const kids = new Map();
-    for (const n of nodes) {
-      const p = n.parent && nodes.some((x) => x.id === n.parent) ? n.parent : null;
-      if (!kids.has(p)) kids.set(p, []);
-      kids.get(p).push(n);
-    }
-    const widthMemo = new Map();
-    const subtreeW = (n) => {
-      if (widthMemo.has(n.id)) return widthMemo.get(n.id);
-      const ch = kids.get(n.id) || [];
-      const cw = ch.reduce((s, c) => s + subtreeW(c), 0) + Math.max(0, ch.length - 1) * GAP_X;
-      const w = Math.max(sizeOf(n).w, cw);
-      widthMemo.set(n.id, w);
-      return w;
-    };
-    const pos = {};
-    const place = (n, x, y) => {
-      const size = sizeOf(n);
-      const at = n.pos ? { x: n.pos.x, y: n.pos.y } : { x, y };
-      pos[n.id] = { ...at, ...size };
-      let cx = at.x;
-      for (const c of kids.get(n.id) || []) { place(c, cx, at.y + size.h + GAP_Y); cx += subtreeW(c) + GAP_X; }
-    };
-    let x = 0;
-    for (const r of kids.get(null) || []) { place(r, x, 0); x += subtreeW(r) + GAP_X * 2; }
-    return pos;
-  }
-
   function layoutAndRender() {
     const nodes = project?.nodes || [];
     $('#empty').hidden = nodes.length > 0;
-    positions = computeLayout(nodes);
+    positions = computeLayout(nodes, project?.edges || [], sizeOf, { gapX: GAP_X, gapY: GAP_Y });
     const working = new Set((project?.requests || []).filter((r) => r.status === 'claimed' && r.nodeId).map((r) => r.nodeId));
     // remove frames of deleted nodes
     for (const [id, f] of frames) if (!positions[id]) { f.el.remove(); frames.delete(id); }
@@ -120,7 +110,7 @@
       f.chosen.textContent = project.status === 'ready' ? 'Ready' : 'Chosen';
       f.work.hidden = !working.has(n.id);
       f.el.classList.toggle('working', working.has(n.id));
-      f.el.classList.toggle('selected', selectedId === n.id);
+      f.el.classList.toggle('selected', selection.has(n.id));
       f.el.classList.toggle('interact', interactId === n.id);
       f.el.classList.toggle('picking', pickId === n.id);
     }
@@ -149,7 +139,7 @@
     const f = { el, iframe: el.querySelector('iframe'), name: el.querySelector('.name'), meta: el.querySelector('.meta'), chosen: el.querySelector('.chosen'), work: el.querySelector('.working'), src: '' };
     f.iframe.title = n.label;
     const shield = el.querySelector('.shield');
-    shield.addEventListener('pointerdown', (e) => { if (e.button === 0 && !space) { select(n.id); startPan(e); } });
+    shield.addEventListener('pointerdown', (e) => { if (e.button === 0 && !space && tool === 'select') { select(n.id); startPan(e); } });
     shield.addEventListener('dblclick', () => setInteract(n.id));
     el.querySelector('.frame-label').addEventListener('pointerdown', (e) => startFrameDrag(e, n.id));
     el.querySelector('.frame-label').addEventListener('dblclick', () => renameNode(n.id));
@@ -165,7 +155,7 @@
     mat.style.backgroundSize = `${g}px ${g}px`;
     mat.style.backgroundPosition = `${view.x}px ${view.y}px`;
     $('#zoom-level').textContent = `${Math.round(view.s * 100)}%`;
-    drawRulers();
+    minimap.draw();
     placeTools();
     if (project) drawLinksLight();
   }
@@ -176,7 +166,7 @@
   // a permanently promoted layer is rasterized once and then stretched, which blurs the frames.
   let anim = null; // { s, cx, cy } zoom around a screen point, or { s, x, y } fly to a view
   let raf = 0;
-  const clampS = (s) => Math.min(2, Math.max(0.03, s));
+  const clampS = (s) => Math.min(3, Math.max(0.1, s));
   function animate(target) {
     anim = target;
     world.style.willChange = 'transform';
@@ -201,8 +191,12 @@
     animate({ s: clampS(from * factor), cx, cy });
   }
 
+  function rectOf(id) {
+    const t = positions[id] ? null : (project?.notes || []).find((x) => x.id === id && x.pos);
+    return positions[id] || (t && { ...t.pos, w: t.size?.w || 280, h: t.size?.h || 200 });
+  }
   function bbox(ids) {
-    const list = ids.map((id) => positions[id]).filter(Boolean);
+    const list = ids.map(rectOf).filter(Boolean);
     if (!list.length) return null;
     const x1 = Math.min(...list.map((p) => p.x)); const y1 = Math.min(...list.map((p) => p.y - 40));
     const x2 = Math.max(...list.map((p) => p.x + p.w)); const y2 = Math.max(...list.map((p) => p.y + p.h));
@@ -211,10 +205,12 @@
   function zoomTo(ids, maxScale = 1) {
     const b = bbox(ids);
     if (!b) return;
-    const pad = 70; const top = 110; const bottom = 170;
-    const W = innerWidth - pad * 2; const H = innerHeight - top - bottom;
-    const s = Math.min(maxScale, Math.max(0.03, Math.min(W / b.w, H / b.h)));
-    const to = { s, x: pad + (W - b.w * s) / 2 - b.x * s, y: top + (H - b.h * s) / 2 - b.y * s };
+    // keep clear of the left toolbar, the Layers and Agent panels and the top bars
+    const left = $('#lefttools').getBoundingClientRect().right + 24; const right = ($('#agent').hidden ? 0 : AGENT_W) + 40;
+    const top = 90; const bottom = 40;
+    const W = innerWidth - left - right; const H = innerHeight - top - bottom;
+    const s = Math.min(maxScale, clampS(Math.min(W / b.w, H / b.h)));
+    const to = { s, x: left + (W - b.w * s) / 2 - b.x * s, y: top + (H - b.h * s) / 2 - b.y * s };
     if (firstFit) { view = to; applyView(); } else animate(to);
   }
   let firstFit = true;
@@ -256,7 +252,7 @@
   }
   mat.addEventListener('pointerdown', (e) => {
     const bg = e.target === mat || e.target === world || e.target === links || e.target.closest?.('#links');
-    if (e.button === 1 || (e.button === 0 && (space || bg))) {
+    if (e.button === 1 || (e.button === 0 && (space || bg || tool === 'hand'))) {
       e.preventDefault();
       startPan(e);
       panState.background = bg;
@@ -278,9 +274,10 @@
   mat.addEventListener('pointercancel', endPan);
 
   function startFrameDrag(e, id) {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || space || tool === 'hand') return; // the mat pans
     e.stopPropagation();
     select(id);
+    if (mode !== 'edit') { startPan(e); return; }
     const p = positions[id];
     const start = { x: e.clientX, y: e.clientY, px: p.x, py: p.y };
     let moved = false;
@@ -299,54 +296,94 @@
     addEventListener('pointermove', move); addEventListener('pointerup', up);
   }
 
-  $('#zoom-in').onclick = () => zoomAt(1.25, innerWidth / 2, innerHeight / 2);
-  $('#zoom-out').onclick = () => zoomAt(0.8, innerWidth / 2, innerHeight / 2);
-  $('#zoom-level').onclick = fitAll;
+  $('#fit-btn').onclick = fitAll;
+  const presets = $('#zoom-presets');
+  const showPresets = (on) => { presets.hidden = !on; $('#zoom-menu').setAttribute('aria-expanded', String(on)); };
+  $('#zoom-menu').onclick = () => showPresets(presets.hidden);
+  presets.onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    showPresets(false);
+    animate({ s: clampS(parseInt(b.textContent, 10) / 100), cx: innerWidth / 2, cy: innerHeight / 2 });
+  };
+  addEventListener('pointerdown', (e) => { if (!presets.hidden && !e.target.closest('#viewbar .zoom')) showPresets(false); });
   addEventListener('resize', () => applyView());
 
-  // ---------------- rulers ----------------
-  function drawRulers() {
-    for (const axis of ['x', 'y']) {
-      const c = $(`#ruler-${axis}`);
-      const dpr = devicePixelRatio || 1;
-      const len = axis === 'x' ? c.clientWidth : c.clientHeight;
-      if (!len) continue;
-      if (axis === 'x') { c.width = len * dpr; c.height = 22 * dpr; } else { c.width = 22 * dpr; c.height = len * dpr; }
-      const g = c.getContext('2d');
-      g.scale(dpr, dpr);
-      g.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--ruler-ink').trim() || '#fff';
-      g.strokeStyle = g.fillStyle;
-      g.font = '500 10px "Instrument Sans", system-ui, sans-serif';
-      const off = axis === 'x' ? view.x - 22 : view.y - 22;
-      const steps = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000];
-      const step = steps.find((st) => st * view.s >= 60) || 10000;
-      const minor = step / 5;
-      const startW = Math.floor(-off / view.s / minor) * minor;
-      g.lineWidth = 1;
-      g.beginPath();
-      for (let w = startW; ; w += minor) {
-        const px = Math.round(w * view.s + off) + 0.5;
-        if (px > len) break;
-        const majorTick = Math.abs(w % step) < 1e-6;
-        const t = majorTick ? 9 : 4;
-        if (axis === 'x') { g.moveTo(px, 22); g.lineTo(px, 22 - t); } else { g.moveTo(22, px); g.lineTo(22 - t, px); }
-        if (majorTick) {
-          if (axis === 'x') g.fillText(String(w), px + 3, 10);
-          else { g.save(); g.translate(10, px - 3); g.rotate(-Math.PI / 2); g.fillText(String(w), 0, 0); g.restore(); }
-        }
-      }
-      g.stroke();
+  const minimap = createMinimap($('#minimap'), {
+    getPositions: () => positions,
+    getView: () => view,
+    setView: (v) => { stopAnim(); view = v; applyView(); },
+  });
+
+  // ---------------- mode & tools ----------------
+  function setMode(m) {
+    mode = m; savePref('mode', m);
+    document.body.dataset.mode = m;
+    for (const b of $('#mode').children) b.setAttribute('aria-checked', String(b.dataset.mode === m));
+  }
+  for (const b of $('#mode').children) b.onclick = () => setMode(b.dataset.mode);
+  setMode(mode);
+
+  function setTool(t) {
+    tool = t;
+    mat.classList.toggle('hand', t === 'hand');
+    for (const b of document.querySelectorAll('#lefttools [data-tool]')) b.setAttribute('aria-pressed', String(b.dataset.tool === t));
+  }
+  setTool('select');
+  $('#lefttools').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.tool) setTool(b.dataset.tool);
+    else if (b.dataset.act === 'duplicate' && primary()) tools.querySelector('[data-act="duplicate"]').click();
+  });
+
+  async function undoRedo(redo) {
+    if (!canEdit()) return;
+    try {
+      const label = await (redo ? history.redo() : history.undo());
+      if (label) showToast(`${redo ? 'Redo' : 'Undo'}: ${label}`);
+    } catch (e) { showToast(e.message); }
+  }
+
+  // ---------------- layers ----------------
+  function renderLayers() {
+    if ($('#layers').hidden || !project) return;
+    const list = $('#layers-list');
+    const q = $('#layers-search').value.trim().toLowerCase();
+    const items = [
+      ...project.nodes.map((n) => ({ id: n.id, kind: 'frame', name: n.label, meta: n.viewport })),
+      ...(project.notes || []).map((t) => ({ id: t.id, kind: 'note', name: t.text.split('\n')[0] || 'Empty note', meta: t.pinned ? 'pinned note' : 'note' })),
+    ].filter((it) => !q || it.name.toLowerCase().includes(q));
+    list.innerHTML = items.length ? '' : '<li class="muted">Nothing found</li>';
+    for (const it of items) {
+      const li = document.createElement('li');
+      const b = document.createElement('button');
+      b.className = `layer layer-${it.kind}`;
+      b.setAttribute('aria-current', String(selection.has(it.id)));
+      b.innerHTML = '<span class="name"></span><span class="meta"></span>';
+      b.querySelector('.name').textContent = it.name;
+      b.querySelector('.meta').textContent = it.meta;
+      b.onclick = () => { if (it.kind === 'frame') select(it.id); zoomTo([it.id]); };
+      li.append(b); list.append(li);
     }
   }
+  $('#layers-search').addEventListener('input', renderLayers);
+  $('#layers-btn').onclick = () => {
+    const l = $('#layers'); l.hidden = !l.hidden;
+    document.body.classList.toggle('layers-open', !l.hidden);
+    $('#layers-btn').setAttribute('aria-expanded', String(!l.hidden));
+    renderLayers();
+    if (!l.hidden) $('#layers-search').focus();
+  };
 
   // ---------------- selection & modes ----------------
   function select(id) {
-    if (selectedId === id) return;
-    selectedId = id;
+    if (selection.size === (id ? 1 : 0) && (!id || selection.has(id))) return;
+    selection.clear();
+    if (id) selection.add(id);
     if (picked && picked.nodeId !== id) picked = null;
-    for (const [fid, f] of frames) f.el.classList.toggle('selected', fid === id);
+    for (const [fid, f] of frames) f.el.classList.toggle('selected', selection.has(fid));
     placeTools();
     updateComposer();
+    renderLayers();
   }
 
   function post(id, msg) { frames.get(id)?.iframe.contentWindow?.postMessage({ dh: true, ...msg }, '*'); }
@@ -376,7 +413,7 @@
       setPick(null);
       select(m.node);
       updateComposer();
-      promptEl.focus();
+      focusPrompt();
     } else if (m.type === 'pick-cancel') {
       setPick(null);
     } else if (m.type === 'key' && m.key === 'Escape') {
@@ -392,7 +429,7 @@
   });
 
   function placeTools() {
-    const id = selectedId;
+    const id = primary();
     const p = id && positions[id];
     const n = id && project?.nodes.find((x) => x.id === id);
     if (!p || !n) { tools.hidden = true; return; }
@@ -400,8 +437,8 @@
     const x = p.x * view.s + view.x;
     const yTop = p.y * view.s + view.y - 30; // just above the frame label
     const narrow = innerWidth < 720;
-    tools.style.left = `${narrow ? 10 : Math.max(30, Math.min(x, innerWidth - tools.offsetWidth - 12))}px`;
-    tools.style.top = `${Math.max(tools.offsetHeight + (narrow ? 96 : 92), yTop)}px`;
+    tools.style.left = `${narrow ? 10 : Math.max($('#lefttools').getBoundingClientRect().right + 12, Math.min(x, innerWidth - tools.offsetWidth - 12))}px`;
+    tools.style.top = `${Math.max(tools.offsetHeight + 64, yTop)}px`;
     for (const b of tools.querySelectorAll('[data-vp]')) b.setAttribute('aria-checked', String(b.dataset.vp === n.viewport));
     tools.querySelector('[data-act="pick"]').setAttribute('aria-pressed', String(pickId === id));
     tools.querySelector('[data-act="interact"]').setAttribute('aria-pressed', String(interactId === id));
@@ -412,8 +449,8 @@
 
   tools.addEventListener('click', async (e) => {
     const b = e.target.closest('button,a');
-    if (!b || !selectedId) return;
-    const id = selectedId;
+    const id = primary();
+    if (!b || !id) return;
     if (b.dataset.vp) {
       const n = project.nodes.find((x) => x.id === id); n.viewport = b.dataset.vp;
       layoutAndRender();
@@ -424,9 +461,10 @@
       if (act === 'pick') setPick(pickId === id ? null : id);
       else if (act === 'interact') setInteract(interactId === id ? null : id);
       else if (act === 'fit-height') { fullHeight[id] = !fullHeight[id]; savePref('fullHeight', fullHeight); layoutAndRender(); }
-      else if (act === 'duplicate') { const n = await api(`/nodes/${id}/duplicate`, { method: 'POST', body: {} }); await refresh(); select(n.id); }
+      else if (act === 'duplicate') { if (!canEdit()) return; const n = await api(`/nodes/${id}/duplicate`, { method: 'POST', body: {} }); await refresh(); select(n.id); }
       else if (act === 'favorite') { await api('/select', { method: 'POST', body: { nodeId: project.selected === id ? null : id } }); }
       else if (act === 'delete') {
+        if (!canEdit()) return;
         const n = project.nodes.find((x) => x.id === id);
         if (confirm(`Delete “${n.label}”? Its file moves to the project's .trash folder.`)) { await api(`/nodes/${id}`, { method: 'DELETE' }); select(null); }
       }
@@ -434,6 +472,7 @@
   });
 
   async function renameNode(id) {
+    if (!canEdit()) return;
     const n = project.nodes.find((x) => x.id === id);
     const label = prompt('Rename design', n.label);
     if (label && label !== n.label) await api(`/nodes/${id}`, { method: 'PATCH', body: { label } }).catch((e) => showToast(e.message));
@@ -441,11 +480,11 @@
 
   // ---------------- status ----------------
   for (const b of document.querySelectorAll('.status button')) {
-    b.onclick = () => api('/status', { method: 'POST', body: { status: b.dataset.status, nodeId: selectedId || project.selected || undefined } }).catch((e) => showToast(e.message));
+    b.onclick = () => api('/status', { method: 'POST', body: { status: b.dataset.status, nodeId: primary() || project.selected || undefined } }).catch((e) => showToast(e.message));
   }
 
   // ---------------- composer ----------------
-  function targetNode() { return project?.nodes.find((x) => x.id === selectedId) || null; }
+  function targetNode() { return project?.nodes.find((x) => x.id === primary()) || null; }
 
   function updateComposer() {
     const n = targetNode();
@@ -583,12 +622,16 @@
     ds.append(b);
   }
 
-  $('#toggle-activity').onclick = () => {
-    const a = $('#activity'); a.hidden = !a.hidden;
-    $('#toggle-activity').setAttribute('aria-expanded', String(!a.hidden));
-    savePref('activity', !a.hidden);
-  };
-  if (loadPref('activity', false)) { $('#activity').hidden = false; $('#toggle-activity').setAttribute('aria-expanded', 'true'); }
+  function setAgent(open) {
+    $('#agent').hidden = !open;
+    document.body.classList.toggle('agent-open', open);
+    $('#agent-btn').setAttribute('aria-expanded', String(open));
+    savePref('agent', open);
+  }
+  $('#agent-btn').onclick = () => setAgent($('#agent').hidden);
+  $('#agent-close').onclick = () => setAgent(false);
+  setAgent(loadPref('agent', false));
+  const focusPrompt = () => { setAgent(true); promptEl.focus(); };
 
   // Who will handle a request: the interactive Claude Code session (listening), a background
   // Claude Code run (claude -p under the user's subscription), or nobody yet.
@@ -599,10 +642,10 @@
     const el = $('#listening');
     let txt; let tip; let live = true;
     if (on) { txt = 'Claude is listening'; tip = 'Your Claude Code session picks requests up right away.'; }
-    else if (rn.running) { txt = 'Claude Code is working'; tip = 'A background Claude Code run (your subscription) is handling your requests. Open Activity to follow it.'; }
+    else if (rn.running) { txt = 'Claude Code is working'; tip = 'A background Claude Code run (your subscription) is handling your requests. Open Agent to follow it.'; }
     else if (working) { txt = `Claude is working on ${working === 1 ? 'your request' : `${working} requests`}`; tip = 'New requests are queued and picked up when Claude finishes.'; }
     else if (rn.enabled && rn.available) { txt = 'Claude Code on call'; tip = `Requests start a background Claude Code run with your subscription (${rn.claude || 'claude'}). No API key is used.`; }
-    else { live = false; txt = 'Claude isn’t listening'; tip = rn.available === false ? (rn.error || 'Claude Code CLI not found.') : 'Background runs are off. Ask Claude in your session to check the design canvas, or turn on “Run Claude Code automatically” in Activity.'; }
+    else { live = false; txt = 'Claude isn’t listening'; tip = rn.available === false ? (rn.error || 'Claude Code CLI not found.') : 'Background runs are off. Ask Claude in your session to check the design canvas, or turn on “Run Claude Code automatically” in the Agent panel.'; }
     el.classList.toggle('on', live);
     el.querySelector('.txt').textContent = txt;
     el.title = tip;
@@ -651,12 +694,16 @@
     if (typing()) { if (e.key === 'Escape') document.activeElement.blur(); return; }
     if (e.key === 'Escape') { if (pickId) setPick(null); else if (interactId) setInteract(null); else if (picked) { picked = null; updateComposer(); } else select(null); }
     else if (e.key === '!' || (e.shiftKey && e.code === 'Digit1')) fitAll();
-    else if (e.key === '@' || (e.shiftKey && e.code === 'Digit2')) { if (selectedId) zoomTo([selectedId]); }
+    else if (e.key === '@' || (e.shiftKey && e.code === 'Digit2')) { if (selection.size) zoomTo([...selection]); }
     else if (e.key === '+' || e.key === '=' || e.key === '-') keyZoom(e.key);
-    else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) tools.querySelector('[data-act="delete"]').click();
-    else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'd' && selectedId) { e.preventDefault(); tools.querySelector('[data-act="duplicate"]').click(); }
-    else if (e.key.toLowerCase() === 'e' && selectedId) setPick(pickId ? null : selectedId);
-    else if (e.key.toLowerCase() === 'i' || e.key === 'Enter') { e.preventDefault(); promptEl.focus(); }
+    else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undoRedo(e.shiftKey); }
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && primary()) tools.querySelector('[data-act="delete"]').click();
+    else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'd' && primary()) { e.preventDefault(); tools.querySelector('[data-act="duplicate"]').click(); }
+    else if (e.metaKey || e.ctrlKey || e.altKey) { /* leave other shortcuts to the browser */ }
+    else if (e.key.toLowerCase() === 'v') setTool('select');
+    else if (e.key.toLowerCase() === 'h') setTool('hand');
+    else if (e.key.toLowerCase() === 'e' && primary()) setPick(pickId ? null : primary());
+    else if (e.key.toLowerCase() === 'i' || e.key === 'Enter') { e.preventDefault(); focusPrompt(); }
   });
   addEventListener('keyup', (e) => { if (e.code === 'Space') { space = false; mat.classList.remove('space'); } });
 
