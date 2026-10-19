@@ -15,7 +15,7 @@ const { startPreview, stopPreview } = await import('../src/preview/http.js');
 const { chromium } = await import('playwright-core');
 
 const p = ws.createProject({ name: 'Canvas check' });
-const { node: a } = ws.writeNode(p.slug, { html: '<h1>A</h1>', label: 'A' });
+const { node: a } = ws.writeNode(p.slug, { html: '<html><body><h1>A</h1></body></html>', label: 'A' });
 ws.writeNode(p.slug, { html: '<h1>B</h1>', label: 'B', parent: a.id });
 const { node: c } = ws.writeNode(p.slug, { html: '<h1>C</h1>', label: 'C' }); // a second root: the rightmost frame
 const info = await startPreview();
@@ -24,7 +24,9 @@ for (const o of [{ channel: 'chrome' }, {}, { channel: 'msedge' }]) { try { brow
 assert.ok(browser, 'no Chromium-based browser found (npx playwright install chromium)');
 
 try {
-  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: info.url });
+  const page = await context.newPage();
   page.setDefaultTimeout(5000);
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -399,6 +401,34 @@ try {
   page.off('dialog', onDialog);
   await page.click('#mode [data-mode="edit"]');
   assert.deepEqual(errors, [], 'no script errors after the selection checks');
+
+  // ---- frame toolbar: Update preset, Create New next page, Pin, Export > Copy HTML
+  await page.keyboard.press('Escape');
+  await page.mouse.click(...await labelOf(a.id));
+  const reqs = async () => (await call('')).requests;
+  await page.click('#frame-tools [data-pop="update"]');
+  await page.click('#frame-tools [data-menu="update"] [data-preset^="Rework"]');
+  await page.keyboard.press('Delete'); // stays in the textarea: no frame is deleted
+  assert.equal((await nodes()).length, count, 'Delete inside a popover does not delete the frame');
+  await page.click('#frame-tools [data-act="send-update"]');
+  await until(async () => (await reqs()).some((r) => r.status === 'pending' && r.type === 'iterate' && r.nodeId === a.id && r.text.startsWith('Rework the colour palette')), 'Update > Color > Send queues an iterate request');
+  await page.click('#frame-tools [data-pop="create"]');
+  await page.click('#frame-tools [data-act="next-page-form"]');
+  await page.fill('#frame-tools .next-page textarea', 'Checkout');
+  await page.fill('#frame-tools .next-page input', 'Buy');
+  await page.click('#frame-tools [data-act="send-next-page"]');
+  await until(async () => (await reqs()).some((r) => r.status === 'pending' && r.type === 'next-page' && r.text === 'Checkout' && r.label === 'Buy'), 'Create New > Next page queues a next-page request with its label');
+  await page.click('#frame-tools [data-pop="update"]');
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#frame-tools [data-menu]:visible').count(), 0, 'Escape closes the popover');
+  assert.equal(await page.locator('#frame-tools').isVisible(), true, 'Escape on a popover keeps the selection');
+  await page.click('#frame-tools [data-act="favorite"]');
+  await until(async () => (await call('')).selected === a.id, 'Pin marks the frame');
+  await until(async () => (await page.getAttribute('#frame-tools [data-act="favorite"]', 'aria-pressed')) === 'true', 'Pin shows aria-pressed');
+  await page.click('#frame-tools [data-pop="export"]');
+  await page.click('#frame-tools [data-act="copy-html"]');
+  await until(async () => (await page.evaluate(() => navigator.clipboard.readText())).includes('<html'), 'Export > Copy HTML puts the page HTML on the clipboard');
+  assert.deepEqual(errors, [], 'no script errors after the toolbar checks');
 
   if (process.argv[2]) {
     await page.screenshot({ path: process.argv[2] });

@@ -755,6 +755,15 @@ import { createMinimap } from './minimap.js';
     tools.querySelector('[data-act="open"]').href = `/f/${encodeURIComponent(slug)}/${n.file}`;
   }
 
+  function closeMenus() {
+    for (const m of tools.querySelectorAll('[data-menu]')) { m.hidden = true; m.previousElementSibling.setAttribute('aria-expanded', 'false'); }
+  }
+  addEventListener('pointerdown', (e) => { if (!e.target.closest('#frame-tools .menu')) closeMenus(); }, true);
+  // Escape closes an open popover first, before the global shortcuts see it
+  addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && tools.querySelector('[data-menu]:not([hidden])')) { closeMenus(); e.stopImmediatePropagation(); }
+  }, true);
+
   tools.addEventListener('click', async (e) => {
     const b = e.target.closest('button,a');
     const id = primary();
@@ -766,8 +775,26 @@ import { createMinimap } from './minimap.js';
       return api(`/nodes/${id}`, { method: 'PATCH', body: { viewport: b.dataset.vp } }).catch((er) => showToast(er.message));
     }
     const act = b.dataset.act;
+    const pop = b.closest('[data-menu]');
+    const field = (sel) => pop?.querySelector(sel);
     try {
-      if (act === 'pick') setPick(pickId === id ? null : id);
+      if (b.dataset.preset) { const t = field('textarea'); t.value = b.dataset.preset; t.focus(); }
+      else if (b.dataset.pop) { const was = b.getAttribute('aria-expanded') === 'true'; closeMenus(); if (!was) { b.setAttribute('aria-expanded', 'true'); b.nextElementSibling.hidden = false; } }
+      else if (act === 'send-update') { const t = field('textarea'); if (await sendRequest('iterate', { text: t.value })) { t.value = ''; closeMenus(); } }
+      else if (act === 'send-variations') { if (await sendRequest('variations', { text: '', count: Number(field('select').value) })) closeMenus(); }
+      else if (act === 'next-page-form') { const f = field('.next-page'); f.hidden = !f.hidden; if (!f.hidden) f.querySelector('textarea').focus(); }
+      else if (act === 'send-next-page') {
+        const [t, l] = [field('.next-page textarea'), field('.next-page input')];
+        if (await sendRequest('next-page', { text: t.value, label: l.value.trim() })) { t.value = l.value = ''; closeMenus(); }
+      }
+      else if (act === 'copy-prompt') { closeMenus(); $('#copy-prompt').click(); }
+      else if (act === 'copy-html') {
+        closeMenus();
+        const html = await (await fetch(`/f/${encodeURIComponent(slug)}/${targetNode().file}`)).text();
+        await navigator.clipboard.writeText(html); showToast('HTML copied');
+      }
+      else if (act === 'open') closeMenus();
+      else if (act === 'pick') setPick(pickId === id ? null : id);
       else if (act === 'interact') setInteract(interactId === id ? null : id);
       else if (act === 'fit-height') { fullHeight[id] = !fullHeight[id]; savePref('fullHeight', fullHeight); layoutAndRender(); }
       else if (act === 'duplicate') { if (!canEdit()) return; const n = await api(`/nodes/${id}/duplicate`, { method: 'POST', body: {} }); await refresh(); select(n.id); }
@@ -898,26 +925,29 @@ import { createMinimap } from './minimap.js';
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('#composer').requestSubmit(); }
   });
 
-  function buildRequest(kind) {
+  // opts (from the frame toolbar popovers) override the composer: { text, count, label }
+  function buildRequest(kind, opts = {}) {
     const n = targetNode();
-    const text = promptEl.value.trim();
-    if (kind === 'variations') return { type: 'variations', nodeId: n?.id || null, text, count: Number($('#var-count').value) };
+    const text = (opts.text ?? promptEl.value).trim();
+    if (kind === 'next-page') return { type: 'next-page', nodeId: n?.id || null, text, label: opts.label || '' };
+    if (kind === 'variations') return { type: 'variations', nodeId: n?.id || null, text, count: opts.count ?? Number($('#var-count').value) };
     if (picked && n && picked.nodeId === n.id) return { type: 'element', nodeId: n.id, text, element: picked.element, viewport: n.viewport };
     return { type: 'iterate', nodeId: n?.id || null, text, viewport: n?.viewport || null };
   }
 
-  async function sendRequest(kind) {
-    const body = buildRequest(kind);
-    if (!body.text && body.type !== 'variations') { promptEl.focus(); showToast('Describe the change first'); return; }
+  async function sendRequest(kind, opts) {
+    const body = buildRequest(kind, opts);
+    if (!body.text && body.type !== 'variations') { if (!opts) promptEl.focus(); showToast('Describe the change first'); return false; }
     try {
       await api('/requests', { method: 'POST', body });
-      promptEl.value = ''; promptEl.style.height = 'auto';
+      if (!opts) { promptEl.value = ''; promptEl.style.height = 'auto'; }
       picked = null; updateComposer();
       const rn = project.runner || {};
       showToast(project.listening ? 'Sent — Claude is picking it up'
         : rn.enabled && rn.available ? (rn.running ? 'Queued — Claude Code takes it after the current run' : 'Sent — starting Claude Code')
           : 'Queued. Ask Claude to “check the design canvas” to pick it up');
-    } catch (e) { showToast(e.message); }
+      return true;
+    } catch (e) { showToast(e.message); return false; }
   }
   $('#composer').addEventListener('submit', (e) => { e.preventDefault(); sendRequest('iterate'); });
   $('#send-variations').onclick = () => sendRequest('variations');

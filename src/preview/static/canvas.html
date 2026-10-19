@@ -101,14 +101,50 @@
       <svg viewBox="0 0 16 16" width="14" height="14"><rect x="1.5" y="2.5" width="13" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5.5 14h5" stroke="currentColor" stroke-width="1.4"/></svg></button>
   </div>
   <span class="sep"></span>
+  <div class="menu">
+    <button data-pop="update" aria-haspopup="true" aria-expanded="false" title="Ask Claude to change this design">Update ▾</button>
+    <div class="popover" data-menu="update" hidden>
+      <div class="chips">
+        <button data-preset="Rework the colour palette: ">Color</button>
+        <button data-preset="Change the layout: ">Layout</button>
+        <button data-preset="Change the visual style: ">Style</button>
+        <button data-preset="Improve the typography: ">Typography</button>
+      </div>
+      <textarea rows="3" aria-label="What should change?" placeholder="What should change?"></textarea>
+      <button data-act="send-update" class="primary">Send</button>
+    </div>
+  </div>
+  <div class="menu">
+    <button data-pop="create" aria-haspopup="true" aria-expanded="false" title="Create new designs from this one">Create New ▾</button>
+    <div class="popover" data-menu="create" hidden>
+      <div class="row">
+        <label>Variations <select aria-label="Number of variations"><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label>
+        <button data-act="send-variations" class="primary">Create</button>
+      </div>
+      <button data-act="next-page-form">Next page in flow</button>
+      <div class="next-page" hidden>
+        <textarea rows="2" aria-label="What page?" placeholder="What page?"></textarea>
+        <input type="text" aria-label="Link label" placeholder="Link label (optional)">
+        <button data-act="send-next-page" class="primary">Send</button>
+      </div>
+    </div>
+  </div>
+  <span class="sep"></span>
   <button data-act="link" title="Link the first selected design to the second">Link</button>
   <button data-act="pick" title="Select an element to change (E)">Select element</button>
   <button data-act="interact" title="Click and scroll inside the design (double-click)">Interact</button>
   <button data-act="fit-height" title="Show the full page height">Full height</button>
   <span class="sep"></span>
   <button data-act="duplicate" title="Duplicate (Ctrl/Cmd+D)">Duplicate</button>
-  <button data-act="favorite" title="Mark as the chosen design">Choose</button>
-  <a data-act="open" target="_blank" rel="noopener" title="Open in a new tab">Open</a>
+  <button data-act="favorite" title="Pin as the chosen design">Pin</button>
+  <div class="menu">
+    <button data-pop="export" aria-haspopup="true" aria-expanded="false" title="Copy or open this design">Export ▾</button>
+    <div class="popover" data-menu="export" hidden>
+      <button data-act="copy-prompt">Copy prompt</button>
+      <button data-act="copy-html">Copy HTML</button>
+      <a data-act="open" target="_blank" rel="noopener" title="Open in a new tab">Open</a>
+    </div>
+  </div>
   <button data-act="delete" class="danger" title="Delete (Del)">Delete</button>
 </div>
 
