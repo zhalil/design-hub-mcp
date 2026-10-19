@@ -93,6 +93,36 @@ body[data-mode="view"] .link-handle, #mat.hand .link-handle, #mat.space .link-ha
 @keyframes flash { 0% { box-shadow: 0 0 0 calc(18px / var(--s)) rgba(59, 130, 246, .55); } 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); } }
 @media (prefers-reduced-motion: reduce) { .frame.working .frame-body::after, .frame.flash .frame-body { animation: none; } }
 
+/* ---------- sticky notes (world px: they scale with the canvas) ---------- */
+.note {
+  position: absolute; z-index: 2; display: flex; flex-direction: column; border-radius: 4px;
+  background: var(--note); color: #1c1917; box-shadow: 0 1px 0 rgba(0, 0, 0, .2), 0 10px 28px rgba(0, 0, 0, .35);
+}
+.note-yellow { --note: #fde68a; } .note-blue { --note: #bfdbfe; } .note-green { --note: #bbf7d0; } .note-pink { --note: #fbcfe8; } .note-gray { --note: #e4e4e7; }
+.note.selected { outline: calc(3px / var(--s)) solid var(--signal); }
+.note-head { display: flex; align-items: center; gap: 6px; padding: 4px 6px 0; cursor: grab; user-select: none; }
+.note-head button { border: 0; background: none; padding: 2px 4px; border-radius: 4px; line-height: 1; color: inherit; }
+.note-head button:hover { background: rgba(0, 0, 0, .08); }
+.note .pin { filter: grayscale(1); opacity: .4; }
+.note .pin[aria-pressed="true"] { filter: none; opacity: 1; }
+.note .dots { display: flex; gap: 4px; opacity: 0; }
+.note:hover .dots, .note:focus-within .dots { opacity: 1; }
+.note .dots button { width: 13px; height: 13px; padding: 0; border-radius: 50%; background: var(--note); border: 1px solid rgba(0, 0, 0, .3); }
+.note .del { margin-left: auto; font-size: 18px; }
+.note textarea { flex: 1; min-height: 0; border: 0; resize: none; outline: none; background: transparent; color: inherit; padding: 4px 12px 12px; font-size: 15px; line-height: 1.45; }
+.note textarea::placeholder { color: rgba(28, 25, 23, .45); }
+body[data-mode="view"] .note-head { cursor: default; }
+body[data-mode="view"] .note .dots, body[data-mode="view"] .note .del { display: none; }
+body[data-mode="view"] .note .pin { pointer-events: none; }
+#mat.note-tool { cursor: crosshair; }
+#pinned-pop { position: fixed; left: 64px; top: 50%; transform: translateY(-50%); width: 280px; padding: 10px 12px; gap: 6px; }
+body.layers-open #pinned-pop { left: 336px; }
+#pinned-pop p { margin: 0; font-size: 12.5px; }
+#pinned-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+#pinned-list li { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; font-size: 13px; }
+#pinned-list span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#pinned-list button { padding: 0; flex: none; }
+
 /* ---------- floating chrome ---------- */
 #header, #viewbar, #topright .row > *, #minimap, #lefttools, #layers, #agent, #frame-tools, .popover {
   background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);

@@ -1,5 +1,5 @@
 // Design Hub canvas: infinite pan/zoom mat with live design frames laid out as iteration trees.
-import { computeLayout, edgeGeometry } from './layout.js';
+import { computeLayout, edgeGeometry, snap } from './layout.js';
 import { createHistory } from './history.js';
 import { createMinimap } from './minimap.js';
 
@@ -19,7 +19,7 @@ import { createMinimap } from './minimap.js';
   const selection = new Set();  // selected node and note ids
   const primary = () => (selection.size === 1 && positions[[...selection][0]] ? [...selection][0] : null);
   const history = createHistory();
-  let tool = 'select';          // 'select' | 'hand'
+  let tool = 'select';          // 'select' | 'hand' | 'note'
   let interactId = null;
   let pickId = null;
   let picked = null;            // { nodeId, element }
@@ -32,7 +32,11 @@ import { createMinimap } from './minimap.js';
   let edgeSel = null;           // selected nav edge id (never together with a frame/note selection)
   let linkDrag = null;          // { from, x, y } while dragging a link handle, in world coords
   let editingEdge = null;       // edge id whose label is being edited inline
-  let dragPos = null;           // { id, pos } while a frame is dragged: refresh() must not snap it back
+  let dragPos = null;           // { id, pos } while a frame or note is dragged: refresh() must not snap it back
+  const noteEls = new Map();    // noteId -> element
+  const noteDrafts = new Map(); // noteId -> text typed here and not yet saved: refresh() keeps it over the server text
+  const noteTimers = new Map(); // noteId -> idle-save timer
+  const NOTE_COLORS = ['yellow', 'blue', 'green', 'pink', 'gray'];
 
   function loadPref(k, d) { try { return JSON.parse(localStorage.getItem(`dh:${slug}:${k}`)) ?? d; } catch { return d; } }
   function savePref(k, v) { try { localStorage.setItem(`dh:${slug}:${k}`, JSON.stringify(v)); } catch { /* storage unavailable */ } }
@@ -59,8 +63,9 @@ import { createMinimap } from './minimap.js';
 
   async function refresh() {
     try { project = await api(''); } catch (e) { showToast(e.message); return; }
-    const dragged = dragPos?.pos && project.nodes.find((n) => n.id === dragPos.id);
+    const dragged = dragPos?.pos && [...project.nodes, ...project.notes].find((n) => n.id === dragPos.id);
     if (dragged) dragged.pos = dragPos.pos;
+    for (const t of project.notes) if (noteDrafts.has(t.id)) t.text = noteDrafts.get(t.id);
     if (edgeSel && !project.edges.some((e) => e.id === edgeSel)) edgeSel = null;
     document.title = `${project.name} · Design Hub`;
     $('#project-name').textContent = project.name;
@@ -76,6 +81,7 @@ import { createMinimap } from './minimap.js';
     renderLayers();
     const pinned = (project.notes || []).filter((n) => n.pinned).length;
     $('#pinned-count').textContent = pinned; $('#pinned-count').hidden = !pinned;
+    renderPinned();
     if (firstLoad) {
       firstLoad = false;
       const hashNode = location.hash.slice(1) || new URLSearchParams(location.search).get('node');
@@ -122,9 +128,144 @@ import { createMinimap } from './minimap.js';
       f.el.classList.toggle('interact', interactId === n.id);
       f.el.classList.toggle('picking', pickId === n.id);
     }
+    renderNotes();
     drawLinks(nodes);
     applyView();
   }
+
+  // ---------------- notes ----------------
+  const note = (id) => project?.notes.find((t) => t.id === id);
+  // Where a note sits: its pos, or (R2: Claude added it without a spot) a column under the Design Context note.
+  function noteRect(t) {
+    const pos = t.pos || { x: -420, y: 312 + project.notes.filter((x) => !x.pos).indexOf(t) * 224 };
+    return { ...pos, w: t.size?.w || 280, h: t.size?.h || 200 };
+  }
+
+  function renderNotes() {
+    const list = project?.notes || [];
+    for (const [id, el] of noteEls) if (!note(id)) { el.remove(); noteEls.delete(id); noteDrafts.delete(id); }
+    for (const t of list) {
+      let el = noteEls.get(t.id);
+      if (!el) { el = noteEl(t.id); noteEls.set(t.id, el); world.appendChild(el); }
+      const r = noteRect(t);
+      Object.assign(el.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
+      el.className = `note note-${t.color}${t.pinned ? ' pinned' : ''}${selection.has(t.id) ? ' selected' : ''}`;
+      el.querySelector('.pin').setAttribute('aria-pressed', String(t.pinned));
+      const ta = el.querySelector('textarea');
+      ta.readOnly = mode !== 'edit';
+      if (ta !== document.activeElement && ta.value !== t.text) ta.value = t.text; // never under the caret
+    }
+  }
+
+  function noteEl(id) {
+    const el = document.createElement('div');
+    el.dataset.id = id;
+    el.innerHTML = `<div class="note-head"><button class="pin" title="Pin: send to Claude with every request" aria-label="Pin note">📌</button>
+      <span class="dots">${NOTE_COLORS.map((c) => `<button class="note-${c}" data-color="${c}" title="${c}" aria-label="${c} note"></button>`).join('')}</span>
+      <button class="del" title="Delete note" aria-label="Delete note">×</button></div><textarea aria-label="Note" placeholder="Write a note…"></textarea>`;
+    el.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || space || tool === 'hand') return; // the mat pans
+      e.stopPropagation();
+      select(id);
+      if (e.target.closest('.note-head') && !e.target.closest('button')) startNoteDrag(e, id);
+    });
+    el.querySelector('.note-head').addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (!b || !note(id) || !canEdit()) return;
+      if (b.classList.contains('del')) deleteNote(id);
+      else patchNote(id, b.dataset.color ? { color: b.dataset.color } : { pinned: !note(id).pinned });
+    });
+    const ta = el.querySelector('textarea');
+    ta.addEventListener('input', () => {
+      noteDrafts.set(id, ta.value);
+      if (note(id)) note(id).text = ta.value;
+      clearTimeout(noteTimers.get(id)); noteTimers.set(id, setTimeout(() => saveNote(id), 600));
+    });
+    ta.addEventListener('blur', () => saveNote(id));
+    return el;
+  }
+
+  function saveNote(id) {
+    clearTimeout(noteTimers.get(id));
+    const text = noteDrafts.get(id);
+    if (text === undefined) return;
+    api(`/notes/${id}`, { method: 'PATCH', body: { text } }).catch((e) => showToast(e.message)).finally(() => {
+      // keep the draft while the user is still typing in it
+      if (noteDrafts.get(id) === text && document.activeElement !== noteEls.get(id)?.querySelector('textarea')) noteDrafts.delete(id);
+    });
+  }
+
+  const patchNote = (id, body) => api(`/notes/${id}`, { method: 'PATCH', body }).then(refresh, (e) => showToast(e.message));
+
+  function startNoteDrag(e, id) {
+    if (mode !== 'edit') { startPan(e); return; }
+    e.preventDefault();
+    const from = noteRect(note(id));
+    const start = { x: e.clientX, y: e.clientY };
+    const drag = { id, pos: null };
+    dragPos = drag;
+    const move = (ev) => {
+      const dx = (ev.clientX - start.x) / view.s; const dy = (ev.clientY - start.y) / view.s;
+      if (!drag.pos && Math.abs(dx) + Math.abs(dy) <= 4 / view.s) return;
+      drag.pos = { x: snap(from.x + dx), y: snap(from.y + dy) };
+      if (note(id)) { note(id).pos = drag.pos; renderNotes(); }
+    };
+    const up = (ev) => {
+      removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
+      const done = () => { if (dragPos === drag) dragPos = null; };
+      const to = drag.pos; const old = { x: from.x, y: from.y };
+      if (ev.type === 'pointercancel' || !to || (to.x === old.x && to.y === old.y)) { done(); if (to) refresh(); return; }
+      undoable(() => moveNote(id, to), { label: 'Move note', undo: () => moveNote(id, old), redo: () => moveNote(id, to) }).finally(done);
+    };
+    addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+  }
+
+  // Undo/redo re-create a deleted note under a new id; steps resolve the id they captured through this map.
+  const noteAlias = new Map();
+  const noteId = (id) => { while (noteAlias.has(id)) id = noteAlias.get(id); return id; };
+  const moveNote = async (id, pos) => { await api(`/notes/${noteId(id)}`, { method: 'PATCH', body: { pos } }); await refresh(); };
+  async function dropNote(id) { // deletes the note and returns it, to re-create it later
+    const t = note(noteId(id));
+    if (!t) throw new Error('That note no longer exists');
+    await api(`/notes/${t.id}`, { method: 'DELETE' }); await refresh();
+    return t;
+  }
+  async function reviveNote(t) {
+    const { text, pinned, color, pos, size } = t;
+    const n = await api('/notes', { method: 'POST', body: { text, pinned, color, pos, size } });
+    noteAlias.set(t.id, n.id); await refresh();
+  }
+
+  function addNote(pos) {
+    if (!canEdit()) return;
+    let id = null; let gone = null;
+    undoable(async () => {
+      ({ id } = await api('/notes', { method: 'POST', body: { text: '', pos } }));
+      await refresh(); select(id); noteEls.get(id)?.querySelector('textarea').focus();
+    }, { label: 'Add note', undo: async () => { gone = await dropNote(id); }, redo: () => reviveNote(gone) });
+  }
+
+  function deleteNote(id) {
+    if (!canEdit()) return;
+    let gone = null;
+    undoable(async () => { gone = await dropNote(id); }, { label: 'Delete note', undo: () => reviveNote(gone), redo: async () => { gone = await dropNote(gone.id); } });
+  }
+
+  const pinPop = $('#pinned-pop');
+  function renderPinned() {
+    if (pinPop.hidden || !project) return;
+    const list = $('#pinned-list');
+    const pinned = project.notes.filter((t) => t.pinned);
+    list.innerHTML = pinned.length ? '' : '<li class="muted">No pinned notes</li>';
+    for (const t of pinned) {
+      const li = document.createElement('li');
+      const name = document.createElement('span'); name.textContent = t.text.split('\n')[0] || 'Empty note';
+      const b = document.createElement('button'); b.className = 'linkish'; b.textContent = 'Go to';
+      b.onclick = () => { pinPop.hidden = true; select(t.id); zoomTo([t.id]); };
+      li.append(name, b); list.append(li);
+    }
+  }
+  addEventListener('pointerdown', (e) => { if (!pinPop.hidden && !e.target.closest('#pinned-pop, [data-act="pinned"]')) pinPop.hidden = true; }, true);
 
   function drawLinks(nodes) {
     const s = view.s;
@@ -222,8 +363,8 @@ import { createMinimap } from './minimap.js';
   }
 
   function rectOf(id) {
-    const t = positions[id] ? null : (project?.notes || []).find((x) => x.id === id && x.pos);
-    return positions[id] || (t && { ...t.pos, w: t.size?.w || 280, h: t.size?.h || 200 });
+    const t = positions[id] ? null : note(id);
+    return positions[id] || (t && noteRect(t));
   }
   // left edge of the Agent panel when it is open, else the window edge
   const rightEdge = () => ($('#agent').hidden ? innerWidth : $('#agent').getBoundingClientRect().left);
@@ -246,7 +387,7 @@ import { createMinimap } from './minimap.js';
     if (firstFit) { view = to; applyView(); } else animate(to);
   }
   let firstFit = true;
-  const fitAll = () => zoomTo(Object.keys(positions), 0.6);
+  const fitAll = () => zoomTo([...Object.keys(positions), ...(project?.notes || []).map((t) => t.id)], 0.6);
   function onScreen(id) {
     const p = positions[id]; if (!p) return true;
     const x = p.x * view.s + view.x; const y = p.y * view.s + view.y;
@@ -283,6 +424,11 @@ import { createMinimap } from './minimap.js';
     mat.setPointerCapture?.(e.pointerId);
   }
   mat.addEventListener('pointerdown', (e) => {
+    if (tool === 'note' && e.button === 0 && !space) {
+      e.preventDefault(); setTool('select');
+      addNote({ x: snap((e.clientX - view.x) / view.s), y: snap((e.clientY - view.y) / view.s) });
+      return;
+    }
     const bg = e.target === mat || e.target === world || e.target === links || e.target.closest?.('#links');
     if (e.button === 1 || (e.button === 0 && (space || bg || tool === 'hand'))) {
       e.preventDefault();
@@ -382,6 +528,7 @@ import { createMinimap } from './minimap.js';
     document.body.dataset.mode = m;
     for (const b of $('#mode').children) b.setAttribute('aria-checked', String(b.dataset.mode === m));
     placeTools(); // Link is Edit-only
+    renderNotes(); // note text is read-only in View mode
   }
   for (const b of $('#mode').children) b.onclick = () => setMode(b.dataset.mode);
   setMode(mode);
@@ -389,6 +536,7 @@ import { createMinimap } from './minimap.js';
   function setTool(t) {
     tool = t;
     mat.classList.toggle('hand', t === 'hand');
+    mat.classList.toggle('note-tool', t === 'note');
     for (const b of document.querySelectorAll('#lefttools [data-tool]')) b.setAttribute('aria-pressed', String(b.dataset.tool === t));
   }
   setTool('select');
@@ -396,6 +544,7 @@ import { createMinimap } from './minimap.js';
     const b = e.target.closest('button'); if (!b) return;
     if (b.dataset.tool) setTool(b.dataset.tool);
     else if (b.dataset.act === 'duplicate' && primary()) tools.querySelector('[data-act="duplicate"]').click();
+    else if (b.dataset.act === 'pinned') { pinPop.hidden = !pinPop.hidden; renderPinned(); }
   });
 
   async function undoRedo(redo) {
@@ -424,7 +573,7 @@ import { createMinimap } from './minimap.js';
       b.innerHTML = '<span class="name"></span><span class="meta"></span>';
       b.querySelector('.name').textContent = it.name;
       b.querySelector('.meta').textContent = it.meta;
-      b.onclick = () => { if (it.kind === 'frame') select(it.id); zoomTo([it.id]); };
+      b.onclick = () => { select(it.id); zoomTo([it.id]); };
       li.append(b); list.append(li);
     }
   }
@@ -445,6 +594,7 @@ import { createMinimap } from './minimap.js';
     if (id) selection.add(id);
     if (picked && picked.nodeId !== id) picked = null;
     for (const [fid, f] of frames) f.el.classList.toggle('selected', selection.has(fid));
+    for (const [nid, el] of noteEls) el.classList.toggle('selected', selection.has(nid));
     placeTools();
     updateComposer();
     renderLayers();
@@ -558,20 +708,20 @@ import { createMinimap } from './minimap.js';
   const addEdge = (from, to, label = '') => edgeCall('/edges', { method: 'POST', body: { from, to, label } });
   const removeEdge = (from, to) => edgeCall(`/edges/${edgeId(from, to)}`, { method: 'DELETE' });
   const labelEdge = (from, to, label) => edgeCall(`/edges/${edgeId(from, to)}`, { method: 'PATCH', body: { label } });
-  async function edgeAction(run, step) {
+  async function undoable(run, step) {
     try { await run(); history.push(step); } catch (e) { showToast(e.message); }
   }
 
   function linkFrames(from, to) {
     if (from === to || !canEdit()) return;
-    edgeAction(() => addEdge(from, to), { label: 'Link', undo: () => removeEdge(from, to), redo: () => addEdge(from, to) });
+    undoable(() => addEdge(from, to), { label: 'Link', undo: () => removeEdge(from, to), redo: () => addEdge(from, to) });
   }
 
   function deleteEdge(id) {
     const e = project.edges.find((x) => x.id === id);
     if (!e || !canEdit()) return;
     const { from, to, label } = e;
-    edgeAction(() => removeEdge(from, to), { label: 'Delete link', undo: () => addEdge(from, to, label), redo: () => removeEdge(from, to) });
+    undoable(() => removeEdge(from, to), { label: 'Delete link', undo: () => addEdge(from, to, label), redo: () => removeEdge(from, to) });
   }
 
   // Highlight by class, not a redraw: replacing the clicked element would swallow its dblclick.
@@ -611,7 +761,7 @@ import { createMinimap } from './minimap.js';
       editingEdge = null; input.remove();
       const label = input.value.trim();
       if (cancel || label === old) { drawLinks(project.nodes); return; }
-      edgeAction(() => labelEdge(from, to, label), { label: 'Rename link', undo: () => labelEdge(from, to, old), redo: () => labelEdge(from, to, label) });
+      undoable(() => labelEdge(from, to, label), { label: 'Rename link', undo: () => labelEdge(from, to, old), redo: () => labelEdge(from, to, label) });
     });
   }
 
@@ -848,11 +998,13 @@ import { createMinimap } from './minimap.js';
     else if (e.key === '+' || e.key === '=' || e.key === '-') keyZoom(e.key);
     else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undoRedo(e.shiftKey); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && edgeSel) deleteEdge(edgeSel);
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && selection.size === 1 && note([...selection][0])) deleteNote([...selection][0]);
     else if ((e.key === 'Delete' || e.key === 'Backspace') && primary()) tools.querySelector('[data-act="delete"]').click();
     else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'd' && primary()) { e.preventDefault(); tools.querySelector('[data-act="duplicate"]').click(); }
     else if (e.metaKey || e.ctrlKey || e.altKey) { /* leave other shortcuts to the browser */ }
     else if (e.key.toLowerCase() === 'v') setTool('select');
     else if (e.key.toLowerCase() === 'h') setTool('hand');
+    else if (e.key.toLowerCase() === 'n') setTool('note');
     else if (e.key.toLowerCase() === 'e' && primary()) setPick(pickId ? null : primary());
     else if (e.key.toLowerCase() === 'i' || e.key === 'Enter') { e.preventDefault(); focusPrompt(); }
   });

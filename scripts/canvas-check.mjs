@@ -184,9 +184,11 @@ try {
   assert.equal(await navCount(), 1, 'filter all: the edge is back');
 
   // double-click the edge to label it, then select it and delete it (undoable)
+  // map the world point through #world's transform: getScreenCTM() on a just re-drawn path sometimes ignores it
   const edgeMid = await page.$eval('#links path.edge-hit', (el) => {
-    const pt = el.getPointAtLength(el.getTotalLength() / 2).matrixTransform(el.getScreenCTM());
-    return [pt.x, pt.y];
+    const pt = el.getPointAtLength(el.getTotalLength() / 2);
+    const [, x, y, s] = /translate\(([-\d.]+)px, ([-\d.]+)px\) scale\(([\d.]+)\)/.exec(document.querySelector('#world').style.transform).map(Number);
+    return [x + pt.x * s, y + pt.y * s];
   });
   await page.click('#agent-close');
   await page.mouse.dblclick(...edgeMid);
@@ -213,6 +215,77 @@ try {
   assert.equal(await left(), during, 'an SSE refresh mid-drag keeps the frame under the pointer');
   await page.mouse.up();
   assert.deepEqual(errors, [], 'no script errors after the edge checks');
+
+  // ---- sticky notes and pinned context
+  const notes = async () => (await call('')).notes;
+  const ctx = (await notes()).find((t) => t.text.startsWith('Design Context'));
+  assert.ok(await page.$(`.note.pinned[data-id="${ctx.id}"]`), 'the Design Context note is shown pinned');
+  assert.equal(await page.textContent('#pinned-count'), '1', '#pinned-count reads 1');
+  await page.click('[data-act="pinned"]');
+  const pop = await page.textContent('#pinned-pop');
+  assert.ok(pop.includes('Pinned notes are sent to Claude with every request.') && pop.includes('Design Context'), 'the pinned popover lists the note with the hint');
+  await page.click('[data-act="pinned"]');
+  assert.ok(await page.isHidden('#pinned-pop'), 'the pinned button closes the popover');
+
+  // N, then a click on empty mat: a snapped note appears there, focused
+  await page.click('#fit-btn'); await settle();
+  const spot = await page.evaluate(() => {
+    const free = (x, y) => document.elementFromPoint(x, y)?.id === 'mat';
+    for (let y = 200; y < 700; y += 20) for (let x = 120; x < 1100; x += 20) if (free(x, y) && free(x + 90, y + 70)) return [x, y];
+  });
+  assert.ok(spot, 'there is empty mat to click');
+  const before = (await notes()).length;
+  await page.keyboard.press('n');
+  assert.equal(await page.getAttribute('[data-tool="note"]', 'aria-pressed'), 'true', 'N picks the note tool');
+  await page.mouse.click(...spot);
+  await until(async () => (await notes()).length === before + 1, 'a click with the note tool creates a note');
+  const made = (await notes()).at(-1);
+  assert.ok(made.pos.x % 24 === 0 && made.pos.y % 24 === 0, 'the new note is snapped to the grid');
+  const noteSel = `.note[data-id="${made.id}"]`;
+  await until(() => page.evaluate((s) => document.activeElement === document.querySelector(`${s} textarea`), noteSel), 'the new note is focused');
+
+  // typing survives an SSE refresh that lands before the note is saved
+  await page.keyboard.type('Users are');
+  const other = (await notes()).find((t) => t.text === 'changed');
+  await call(`/notes/${other.id}`, 'PATCH', { text: 'changed again' });
+  await until(async () => await page.$eval(`.note[data-id="${other.id}"] textarea`, (t) => t.value) === 'changed again', 'the SSE refresh shows the other note change');
+  assert.equal(await page.$eval(`${noteSel} textarea`, (t) => t.value), 'Users are', 'an SSE refresh while typing keeps the typed text');
+  await page.keyboard.type(' dispatchers');
+  await page.keyboard.press('Escape'); // blurs the textarea: saved, and Ctrl+Z below is not the browser's text undo
+  await until(async () => (await notes()).find((t) => t.id === made.id)?.text === 'Users are dispatchers', 'blur saves the note text');
+
+  // pin it, then undo / redo the creation
+  await page.click(`${noteSel} .pin`);
+  await until(async () => await page.textContent('#pinned-count') === '2', 'pinning the note makes #pinned-count read 2');
+  await page.keyboard.press('Control+z');
+  await until(async () => (await notes()).length === before, 'Ctrl+Z after creation removes the note');
+  await until(async () => !await page.$(noteSel), 'the undone note is no longer drawn');
+  await page.keyboard.press('Control+Shift+z');
+  await until(async () => (await notes()).some((t) => t.text === 'Users are dispatchers' && t.pinned), 'Ctrl+Shift+Z brings the note back with its text and pin');
+
+  // drag by the header: snapped and undoable
+  const back = (await notes()).find((t) => t.text === 'Users are dispatchers');
+  const backSel = `.note[data-id="${back.id}"]`;
+  await until(async () => Boolean(await page.$(backSel)), 'the re-created note is drawn');
+  const head = await page.locator(`${backSel} .note-head`).boundingBox();
+  await drag(head.x + head.width * 0.6, head.y + head.height / 2, 100, 50);
+  await until(async () => (await notes()).find((t) => t.id === back.id).pos.x !== back.pos.x, 'a header drag moves the note');
+  const moved = (await notes()).find((t) => t.id === back.id).pos;
+  assert.ok(moved.x % 24 === 0 && moved.y % 24 === 0, 'the moved note is snapped');
+  await page.waitForTimeout(300); // the undo step is pushed once the client's own refresh lands; nothing on screen shows it
+  await page.keyboard.press('Control+z');
+  await until(async () => JSON.stringify((await notes()).find((t) => t.id === back.id).pos) === JSON.stringify(back.pos), 'Ctrl+Z puts the note back');
+
+  // Delete with the note selected deletes it; Ctrl+Z restores it
+  await page.keyboard.press('Delete');
+  await until(async () => !await page.$(backSel), 'Delete removes the selected note');
+  await page.keyboard.press('Control+z');
+  await until(async () => (await notes()).some((t) => t.text === 'Users are dispatchers'), 'Ctrl+Z restores the deleted note');
+  await page.click('#mode [data-mode="view"]');
+  assert.ok(await page.$eval(`.note[data-id="${ctx.id}"] textarea`, (t) => t.readOnly), 'view mode: note text is read-only');
+  assert.ok(await page.isHidden(`.note[data-id="${ctx.id}"] .del`), 'view mode: no note delete button');
+  await page.click('#mode [data-mode="edit"]');
+  assert.deepEqual(errors, [], 'no script errors after the note checks');
 
   if (process.argv[2]) {
     await page.screenshot({ path: process.argv[2] });
