@@ -147,6 +147,13 @@ Lint и скриншоты запускают установленный Chrome 
 | Новая версия | выбрать фрейм → описать правку → **Send to Claude** (появится дочерний фрейм) |
 | Варианты | `3 variations` — N соседних вариантов; без выбранного фрейма — N новых направлений |
 | Остальное | mobile / tablet / desktop, Full height, Duplicate, Choose, Open, Delete, перетаскивание за подпись |
+| Режимы | **View** — только смотреть, **Edit** — менять холст |
+| Инструменты | `V` — выбор, `H` — рука, `N` — заметка (клик по холсту), `E` — выбрать элемент |
+| Мультивыбор | Shift+клик или рамка; группа двигается вместе, шаг сетки 24 px; **Auto layout** расставляет фреймы |
+| Undo | Ctrl/Cmd+Z, повтор — Ctrl/Cmd+Shift+Z; Ctrl/Cmd+D — дубликат, Del — удалить |
+| Связи | выбрать два фрейма → **Link**: стрелка потока с подписью; фильтр показывает все/выбранные связи |
+| Заметки | стикеры; **Pin** делает заметку контекстом продукта, который Claude учитывает во всех следующих дизайнах |
+| Тулбар фрейма | **Update ▾** (пресеты правок), **Create New ▾** (Variations, Next page in flow), Pin, **Export ▾** (Copy prompt, Copy HTML, Open) |
 | Без MCP-петли | **Copy prompt** — готовый текст для вставки в Claude Code |
 
 ### Кто выполняет запросы из холста
@@ -237,7 +244,9 @@ node cli/design-hub.js skills remove huashu-design
 | Каталог | `catalog_search`, `catalog_get` (шаблон приходит вместе со своими craft-правилами), `skills_install` |
 | UI UX Pro Max | `style_design_system`, `style_search` (домены и стеки) |
 | Проекты | `project_create`, `project_list`, `project_get`, `design_md_set` |
-| Холст | `design_write`, `design_status`, `canvas_open`, `canvas_wait_feedback` (нет в фоновых запусках), `feedback_resolve` |
+| Холст | `design_write`, `design_status`, `canvas_open`, `canvas_wait_feedback` (нет в фоновых запусках), `feedback_resolve`, `canvas_link` (стрелка между дизайнами), `canvas_note` (стикеры и закреплённый контекст) |
+
+`design_write` принимает `link_from` / `link_label` (следующая страница потока), `project_get` отдаёт `edges`, `notes` и `context`.
 | Проверка | `design_screenshot` (картинки в ответ), `design_lint` (рендер + anti-slop), `critique_save` (отчёт с радаром) |
 | В код | `handoff` (HTML + DESIGN.md + токены + HANDOFF.md с правилами стека) |
 
