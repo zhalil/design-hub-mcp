@@ -18,6 +18,7 @@ Design Hub combines four upstream sources. Each owns one job; do not let two of 
 3. If DESIGN.md already exists (brand given), "3 directions" means 3 variations *inside* the system, not 3 new styles (overrides huashu's "even with a brand" rule).
 4. Use one critique: critique_save's 5 dimensions. Run it as a separate explicit step, never in the same breath as generating (ideally in a subagent that did not write the design). Ground it in design_screenshot + design_lint, not only the source.
 5. Templates bring their own craft rules (catalog_get returns them). Treat P0 lint findings as must-fix before marking a design ready.
+6. Read context (pinned notes) from project_get and follow it. Link the pages of a flow (design_write link_from / canvas_link), and offer to save product logic the user tells you as a pinned note (canvas_note pinned=true).
 
 ## Steps
 0. **Project.** project_create (name, brief; design_system if the user has a brand or names one). Reuse an existing project when the user is iterating.
@@ -28,7 +29,7 @@ Design Hub combines four upstream sources. Each owns one job; do not let two of 
    - When the user chooses: design_md_set for the chosen direction (adapt an OpenDesign system via from_system, or write content).
 2. **Build.** Pick the template that matches the output (catalog_search kind=templates, e.g. saas-landing, dashboard, mobile-app, html-ppt-*). catalog_get it — follow its structure and the rules it pulls in. Write the design as ONE self-contained HTML file: inline CSS/JS, read tokens from DESIGN.md (copy them into :root or link ../tokens.css), real copy (no lorem), SVG icons, <meta name="viewport">. Save with design_write (parent = the chosen root).
 3. **Check.** design_lint (desktop + mobile) and design_screenshot. Fix every P0. Then critique (rule 4) and save it with critique_save; apply the Fix list as a new iteration.
-4. **Iterate with the user.** design_status "review", then loop: canvas_wait_feedback → do each request → design_write (parent = request.nodeId; for "element" requests change only that element; for "variations" write N siblings with the same parent) → feedback_resolve with a one-line reply and the new node ids. Stop when the user marks the project ready or says stop.
+4. **Iterate with the user.** design_status "review", then loop: canvas_wait_feedback → do each request → design_write (parent = request.nodeId; for "element" requests change only that element; for "variations" write N siblings with the same parent; for "next-page" design_write with link_from = request.nodeId and no parent) → feedback_resolve with a one-line reply and the new node ids. Stop when the user marks the project ready or says stop.
 5. **Ready & handoff.** design_status "ready" (opens the browser on the chosen design). If code is wanted: handoff → implement in the user's stack (style_search with stack=… for stack rules).
 
 ## Writing a design file

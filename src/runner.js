@@ -86,18 +86,22 @@ function summarizeTool(name, input = {}) {
   return `${short}${hint ? ` · ${String(hint).slice(0, 60)}` : ''}`;
 }
 
-function buildPrompt(p, requests) {
+export function buildPrompt(p, requests) {
   const items = requests.map((r) => {
     const n = r.nodeId ? p.nodes.find((x) => x.id === r.nodeId) : null;
     return {
-      request_id: r.id, type: r.type, text: r.text, count: r.count || undefined, element: r.element || undefined,
+      request_id: r.id, type: r.type, text: r.text, count: r.count || undefined, element: r.element || undefined, label: r.label || undefined,
       node: n ? { id: n.id, label: n.label, viewport: n.viewport, file: ws.nodeFile(p.slug, n) } : null,
     };
   });
+  const pinned = ws.pinnedContext(p).map((c) => c.text).join('\n---\n');
+  const CAP = 12000, CUT = '… (truncated, see project_get context)';
+  const head = 'Product context pinned by the user (follow it):\n';
+  const context = pinned ? `\n${(head + pinned).length > CAP ? (head + pinned).slice(0, CAP - CUT.length) + CUT : head + pinned}\n\n` : '';
   return `You are Claude Code running in the background for the Design Hub canvas. The user is looking at the canvas in their browser, not at this chat, so everything you produce must go onto the canvas through the design-hub tools.
 
 Project: "${p.slug}" (${p.name}). Brief: ${p.brief || '—'}
-Requests sent from the canvas, handle them in order:
+${context}Requests sent from the canvas, handle them in order:
 ${JSON.stringify(items, null, 2)}
 
 How to work:
@@ -106,6 +110,7 @@ How to work:
    - element: change only that element (selector given), keep everything else byte-identical;
    - iterate: apply the change to the whole design;
    - variations: write N distinct variations as siblings with the same parent (no parent if there is no node: N new directions);
+   - next-page: create the next page of the flow: design_write with link_from = the request's node id, link_label = the request's label (or a short one you choose), no parent;
    - pick: the user chose that node; if there is no DESIGN.md yet, write one for it with design_md_set.
    If a request needs a new layout, use catalog_search / catalog_get for a fitting template and its rules.
 3. Run design_lint on every node you wrote. Fix P0 issues your change introduced (design_write node=<id>). For an "element" request do not touch other P0 issues — mention them in the reply instead.
