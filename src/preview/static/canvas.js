@@ -234,11 +234,17 @@
   addEventListener('wheel', (e) => {
     if (e.ctrlKey || e.metaKey) { e.preventDefault(); wheelZoom(e.deltaY, e.deltaMode, e.clientX, e.clientY); }
   }, { passive: false });
+  // Plain wheel zooms; Shift+wheel pans horizontally, Alt+wheel vertically.
   mat.addEventListener('wheel', (e) => {
     e.preventDefault();
     if (e.ctrlKey || e.metaKey) return;
-    if (anim && anim.cx === undefined) stopAnim();
-    view.x -= e.deltaX; view.y -= e.deltaY; applyView();
+    if (!e.shiftKey && !e.altKey) { wheelZoom(e.deltaY, e.deltaMode, e.clientX, e.clientY); return; }
+    if (anim) stopAnim();
+    const k = e.deltaMode === 1 ? 20 : 1;
+    // browsers turn Shift+wheel into deltaX, so take whichever axis moved
+    const d = (Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX) * k;
+    if (e.shiftKey) view.x -= d; else view.y -= d;
+    applyView();
   }, { passive: false });
 
   let space = false;
