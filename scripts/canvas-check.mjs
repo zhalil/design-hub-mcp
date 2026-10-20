@@ -314,7 +314,7 @@ try {
   await page.keyboard.press('Control+z');
   await until(async () => JSON.stringify([await posOf(a.id), await posOf(c.id)]) === stored, 'Ctrl+Z puts both frames back, auto-placed C without pos');
   await until(async () => JSON.stringify([await at(a.id), await at(c.id)]) === JSON.stringify([a0, c0]), 'Ctrl+Z draws both frames where they were');
-  await call(`/nodes/${c.id}`, 'PATCH', c0); // pin C: the checks below expect it to stay put when A and B are restored
+  await call(`/nodes/${c.id}`, 'PATCH', { x: a0.x, y: a0.y + 1440 }); // pin C under A, clear of B (A's iteration, right of A): the checks below expect it to stay put when A and B are restored
 
   // Shift+click a note header adds the note; a frame + note group drag moves the note by the same delta
   const g24 = (v) => Math.round(v / 24) * 24;
@@ -386,12 +386,12 @@ try {
   await page.keyboard.press('Control+z');
   await until(async () => (await posOf(b.id)) === undefined, 'Ctrl+Z of a move leaves auto-placed B without pos');
 
-  // Auto layout puts the source of a nav edge left of its target
+  // Auto layout puts the source of a nav edge above its target
   await call(`/nodes/${c.id}`, 'PATCH', { x: (await posOf(a.id)).x + 2400, y: 0 });
   const beforeLayout = await posOf(c.id);
   await until(async () => JSON.stringify(await at(c.id)) === JSON.stringify(beforeLayout), 'C is drawn right of A'); // not just "right of A": C may already be there before the PATCH lands
   await page.click('[data-act="autolayout"]');
-  await until(async () => (await posOf(c.id)).x < (await posOf(a.id)).x, 'Auto layout puts C (source) left of A (target)');
+  await until(async () => (await posOf(c.id)).y < (await posOf(a.id)).y, 'Auto layout puts C (source) above A (target)');
   await page.keyboard.press('Control+z');
   await until(async () => JSON.stringify(await posOf(c.id)) === JSON.stringify(beforeLayout), 'Ctrl+Z undoes the auto layout');
   await until(async () => (await posOf(b.id)) === undefined, 'Ctrl+Z of Auto layout leaves auto-placed B without pos');
