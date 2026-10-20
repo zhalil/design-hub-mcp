@@ -1,5 +1,5 @@
 // Design Hub canvas: infinite pan/zoom mat with live design frames laid out as iteration trees.
-import { autoLayout, computeLayout, edgeGeometry, snap } from './layout.js';
+import { autoLayout, computeLayout, edgeGeometry, sectionBoxes, snap } from './layout.js';
 import { createHistory } from './history.js';
 import { createMinimap } from './minimap.js';
 
@@ -264,9 +264,14 @@ import { createMinimap } from './minimap.js';
   }
   addEventListener('pointerdown', (e) => { if (!pinPop.hidden && !e.target.closest('#pinned-pop, [data-act="pinned"]')) pinPop.hidden = true; }, true);
 
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
   function drawLinks(nodes) {
     const s = view.s;
     const parts = [`<defs><marker id="arrow" markerUnits="userSpaceOnUse" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="${12 / s}" markerHeight="${12 / s}" orient="auto"><path d="M0,0L10,5L0,10z"/></marker></defs>`];
+    for (const b of sectionBoxes(nodes, positions, 120)) { // the frame labels above the top row stay inside
+      const top = 40 / s;
+      parts.push(`<rect class="section" x="${b.x}" y="${b.y - top}" width="${b.w}" height="${b.h + top}" rx="${12 / s}"/><text class="section" x="${b.x}" y="${b.y - top - 10 / s}" font-size="${15 / s}">${esc(b.section)}</text>`);
+    }
     if (linksFilter === 'all') {
       for (const n of nodes) {
         if (!n.parent || !positions[n.parent] || !positions[n.id]) continue;

@@ -38,6 +38,8 @@ body[data-mode="view"] .frame-label { cursor: default; }
 #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; user-select: none; }
 #links { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
 #links path { fill: none; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+#links rect.section { fill: rgba(255, 255, 255, .03); stroke: rgba(255, 255, 255, .18); stroke-width: 1; vector-effect: non-scaling-stroke; }
+#links text.section { fill: rgba(255, 255, 255, .7); font-weight: 600; }
 #links path.lineage { stroke: rgba(255, 255, 255, .35); stroke-dasharray: 5 5; }
 #links circle { fill: var(--mat); stroke: rgba(255, 255, 255, .7); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 #links path.nav, #links path.temp { stroke: var(--signal); stroke-width: 2; }

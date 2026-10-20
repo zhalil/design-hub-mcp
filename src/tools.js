@@ -319,13 +319,14 @@ export function buildServer({ worker = false } = {}) {
       request_id: z.string().optional().describe('The canvas request this answers (also resolve it with feedback_resolve)'),
       link_from: z.string().optional().describe('Also draw a flow arrow from this node to the new one (next page of a flow)'),
       link_label: z.string().optional().describe('Arrow label, e.g. the button text'),
+      section: z.string().optional().describe('Part of the product this page belongs to, e.g. "User", "Orders": the canvas groups a section\'s pages in one framed column under the pages without a section. Iterations follow their page; "" clears'),
     },
     async (a) => {
       let html = a.html;
       if (!html && a.file) html = fs.readFileSync(path.resolve(a.file), 'utf8');
       if (!html?.trim()) throw new Error('Pass html or file.');
       if (!/<html|<body|<!doctype/i.test(html)) html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>${html}</body></html>`;
-      const { project: p, node } = ws.writeNode(a.project, { html, parent: a.parent, node: a.node, label: a.label, note: a.note, viewport: a.viewport, requestId: a.request_id, linkFrom: a.link_from, linkLabel: a.link_label });
+      const { project: p, node } = ws.writeNode(a.project, { html, parent: a.parent, node: a.node, label: a.label, note: a.note, viewport: a.viewport, requestId: a.request_id, linkFrom: a.link_from, linkLabel: a.link_label, section: a.section });
       const issues = render.staticLint(html);
       if (config.openMode === 'always' && !viewersOf(p.slug)) maybeOpen(projectUrl(p.slug, node.id));
       return text({
@@ -390,7 +391,7 @@ export function buildServer({ worker = false } = {}) {
           element: `Change only this element (keep everything else identical) and save as an iteration: design_write(parent="${n?.id}")`,
           variations: `Write ${r.count || 3} distinct variations as siblings: design_write(parent="${n?.id ?? ''}") ×${r.count || 3}${n ? '' : ' (no parent = new directions)'}`,
           pick: `The user chose ${n?.id}. Use it as the base for the next step (set DESIGN.md from it if this was the direction phase).`,
-          'next-page': `Create the next page of the flow: design_write(link_from="${n?.id}", link_label="${r.label || '<a short label you choose>'}", no parent)`,
+          'next-page': `Create the next page of the flow: design_write(link_from="${n?.id}", link_label="${r.label || '<a short label you choose>'}", section = the part of the product it belongs to (usually ${n?.section ? `"${n.section}"` : 'the source page\'s section'}), no parent)`,
           comment: 'Answer or apply the comment.',
         }[r.type];
         return { id: r.id, type: r.type, text: r.text, count: r.count || undefined, element: r.element || undefined, node: n ? nodeView(fresh, n) : null, how };

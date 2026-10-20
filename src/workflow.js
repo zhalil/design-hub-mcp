@@ -18,7 +18,7 @@ Design Hub combines four upstream sources. Each owns one job; do not let two of 
 3. If DESIGN.md already exists (brand given), "3 directions" means 3 variations *inside* the system, not 3 new styles (overrides huashu's "even with a brand" rule).
 4. Use one critique: critique_save's 5 dimensions. Run it as a separate explicit step, never in the same breath as generating (ideally in a subagent that did not write the design). Ground it in design_screenshot + design_lint, not only the source.
 5. Templates bring their own craft rules (catalog_get returns them). Treat P0 lint findings as must-fix before marking a design ready.
-6. Read context (pinned notes) from project_get and follow it. Link the pages of a flow (design_write link_from / canvas_link), and offer to save product logic the user tells you as a pinned note (canvas_note pinned=true).
+6. Read context (pinned notes) from project_get and follow it. Link the pages of a flow (design_write link_from / canvas_link) and give each page the section of the product it belongs to (design_write section, e.g. "User", "Orders"; entry pages like Home stay without one), and offer to save product logic the user tells you as a pinned note (canvas_note pinned=true).
 
 ## Steps
 0. **Project.** project_create (name, brief; design_system if the user has a brand or names one). Reuse an existing project when the user is iterating.

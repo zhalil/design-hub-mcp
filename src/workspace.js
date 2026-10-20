@@ -84,7 +84,7 @@ export function getNode(p, id) {
 }
 
 /** Create a new node (optionally a child of `parent`) or overwrite an existing node in place. */
-export function writeNode(slug, { html, parent = null, node = null, label, note, viewport, origin = 'agent', requestId = null, linkFrom = null, linkLabel = '' }) {
+export function writeNode(slug, { html, parent = null, node = null, label, note, viewport, origin = 'agent', requestId = null, linkFrom = null, linkLabel = '', section }) {
   const p = loadProject(slug);
   if (linkFrom) getNode(p, linkFrom);
   if (linkFrom && linkFrom === node) throw new Error('An edge cannot link a node to itself.');
@@ -103,6 +103,7 @@ export function writeNode(slug, { html, parent = null, node = null, label, note,
     n = { id, label: label || (parent ? `Iteration of ${parent}` : `Design ${id.slice(1)}`), parent: parent || null, file: `nodes/${id}.html`, createdAt: now, updatedAt: now, revision: 1, viewport: viewport || inheritViewport(p, parent), note: note || '', origin, requestId };
     p.nodes.push(n);
   }
+  if (section !== undefined) n.section = cleanSection(section);
   fs.mkdirSync(path.join(projectDir(slug), 'nodes'), { recursive: true });
   fs.writeFileSync(nodeFile(slug, n), html);
   if (p.status === 'ready' && !node) p.status = 'review';
@@ -160,11 +161,15 @@ export function restoreNode(slug, id) {
   return t.node;
 }
 
+// A section groups a page with the pages of the same part of the product (User, Orders…); '' or null clears it.
+const cleanSection = (s) => String(s ?? '').trim().slice(0, 60);
+
 export function updateNodeMeta(slug, id, patch) {
   const p = loadProject(slug);
   const n = getNode(p, id);
   if (patch.viewport !== undefined && !Object.hasOwn(VIEWPORTS, patch.viewport)) throw new Error(`viewport must be one of ${Object.keys(VIEWPORTS).join(', ')}`);
   for (const k of ['label', 'viewport', 'note']) if (patch[k] !== undefined) n[k] = patch[k];
+  if (patch.section !== undefined) n.section = cleanSection(patch.section);
   if (patch.x === null && patch.y === null) delete n.pos;
   else if (patch.x !== undefined && patch.y !== undefined) n.pos = { x: patch.x, y: patch.y };
   return save(p, 'node-meta');

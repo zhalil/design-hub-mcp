@@ -250,7 +250,7 @@ node cli/design-hub.js skills remove huashu-design
 | Проверка | `design_screenshot` (картинки в ответ), `design_lint` (рендер + anti-slop), `critique_save` (отчёт с радаром) |
 | В код | `handoff` (HTML + DESIGN.md + токены + HANDOFF.md с правилами стека) |
 
-`design_write` принимает `link_from` / `link_label` (следующая страница потока), `project_get` отдаёт `edges`, `notes` и `context`.
+`design_write` принимает `link_from` / `link_label` (следующая страница потока) и `section` (раздел продукта: страницы раздела стоят на холсте одной колонкой в рамке под страницами без раздела), `project_get` отдаёт `edges`, `notes` и `context`.
 
 ### Как источники разведены между собой
 

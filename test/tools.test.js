@@ -56,6 +56,14 @@ test('design_write link_from creates edge', async () => {
   assert.deepEqual(g.edges.map((e) => [e.from, e.to, e.label]), [[a, r.node.id, 'Next']]);
 });
 
+test('design_write section is stored, trimmed, and cleared with ""', async () => {
+  const { slug } = ws.createProject({ name: 'S' });
+  const r = await call('design_write', { project: slug, html: '<p>a</p>', section: '  User ' });
+  assert.equal(ws.loadProject(slug).nodes[0].section, 'User');
+  await call('design_write', { project: slug, html: '<p>a</p>', node: r.node.id, section: '' });
+  assert.equal(ws.loadProject(slug).nodes[0].section, '');
+});
+
 test('runner prompt includes pinned context and truncates at 12000', () => {
   const { slug } = ws.createProject({ name: 'R' });
   ws.addNote(slug, { text: 'x'.repeat(15000), pinned: true });

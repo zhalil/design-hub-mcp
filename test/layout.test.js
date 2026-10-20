@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { snap, computeLayout, autoLayout, edgeGeometry } from '../src/preview/static/layout.js';
+import { snap, computeLayout, autoLayout, edgeGeometry, sectionBoxes } from '../src/preview/static/layout.js';
 
 const sizeOf = () => ({ w: 1440, h: 900 });
 const node = (id, extra = {}) => ({ id, parent: null, viewport: 'desktop', createdAt: id, ...extra });
@@ -43,6 +43,21 @@ test('a page linked from two branches sits below both, under the deeper one; lev
   assert.equal(pos.catalog.y, pos.about.y);
   assert.ok(pos.cart.y > pos.product.y && pos.product.y > pos.catalog.y);
   assert.equal(pos.cart.x, pos.product.x);
+});
+
+test('a section is one block under the page linking into it, beside that page\'s other branches', () => {
+  const nodes = [node('home', { createdAt: 0 }), node('login', { createdAt: 1 }), node('profile', { createdAt: 2, section: 'User' }),
+    node('edit', { createdAt: 3, section: 'User' }), node('v2', { createdAt: 4, parent: 'profile' }), node('cart', { createdAt: 5, section: 'Checkout' })];
+  const edges = [nav('home', 'login'), nav('home', 'profile'), nav('profile', 'edit'), nav('edit', 'cart')];
+  const pos = computeLayout(nodes, edges, sizeOf);
+  assert.equal(pos.profile.y, pos.login.y + 2 * 220, 'the block leaves room for its title');
+  assert.ok(pos.profile.x > pos.login.x + 1440);
+  assert.deepEqual([pos.edit.x, pos.edit.y], [pos.profile.x + (1440 + 140) / 2, pos.profile.y + 900 + 220], 'the section flows top down inside, centered under the profile row');
+  assert.equal(pos.v2.y, pos.profile.y, 'iterations stay in their page row, in the section');
+  assert.ok(pos.cart.y > pos.edit.y + 900, 'a section entered only from another section hangs under it');
+  const [user, checkout] = sectionBoxes(nodes, pos);
+  assert.deepEqual(user, { section: 'User', x: pos.profile.x, y: pos.profile.y, w: 2 * 1440 + 140, h: 2 * 900 + 220 });
+  assert.equal(checkout.section, 'Checkout');
 });
 
 test('iterations stand in their page row, to the right', () => {

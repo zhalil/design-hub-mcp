@@ -110,7 +110,7 @@ How to work:
    - element: change only that element (selector given), keep everything else byte-identical;
    - iterate: apply the change to the whole design;
    - variations: write N distinct variations as siblings with the same parent (no parent if there is no node: N new directions);
-   - next-page: create the next page of the flow: design_write with link_from = the request's node id, link_label = the request's label (or a short one you choose), no parent;
+   - next-page: create the next page of the flow: design_write with link_from = the request's node id, link_label = the request's label (or a short one you choose), section = the part of the product the page belongs to (usually the source page's section), no parent;
    - pick: the user chose that node; if there is no DESIGN.md yet, write one for it with design_md_set.
    If a request needs a new layout, use catalog_search / catalog_get for a fitting template and its rules.
 3. Run design_lint on every node you wrote. Fix P0 issues your change introduced (design_write node=<id>). For an "element" request do not touch other P0 issues — mention them in the reply instead.
