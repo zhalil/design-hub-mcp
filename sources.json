@@ -47,6 +47,40 @@
       }
     },
     {
+      "id": "taste-skill",
+      "repo": "https://github.com/Leonxlnx/taste-skill.git",
+      "ref": "main",
+      "enabled": true,
+      "license": "MIT",
+      "sparse": ["skills", "/LICENSE*"],
+      "provides": {
+        "skills": ["skills"]
+      }
+    },
+    {
+      "id": "impeccable",
+      "repo": "https://github.com/pbakaus/impeccable.git",
+      "ref": "main",
+      "enabled": true,
+      "license": "Apache-2.0",
+      "$sparse": "the repo ships the same skill for a dozen agents plus a Rust CLI and test fixtures; only the plugin copy is kept",
+      "sparse": ["plugin/skills/impeccable", "/LICENSE*", "/NOTICE*"],
+      "provides": {
+        "skills": ["plugin/skills"]
+      }
+    },
+    {
+      "id": "awesome-design-md",
+      "repo": "https://github.com/VoltAgent/awesome-design-md.git",
+      "ref": "main",
+      "enabled": true,
+      "license": "MIT",
+      "sparse": ["/design-md/*/DESIGN.md", "/LICENSE*"],
+      "provides": {
+        "systems": ["design-md"]
+      }
+    },
+    {
       "id": "anthropic-skills",
       "repo": "https://github.com/anthropics/skills.git",
       "ref": "main",

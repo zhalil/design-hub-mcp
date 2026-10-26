@@ -4,7 +4,9 @@
 
 - **OpenDesign** — 150+ дизайн-систем (`DESIGN.md` + токены), 110+ шаблонов под тип результата (лендинг, дашборд, мобилка, слайды) и craft-правила (anti-AI-slop, типографика, цвет, laws of UX);
 - **huashu-design** — скилл «арт-директора»: три направления до начала работы, правила вкуса, references, критика;
-- **UI UX Pro Max** — поисковый движок по стилям, палитрам, шрифтам, UX-правилам и правилам стеков.
+- **UI UX Pro Max** — поисковый движок по стилям, палитрам, шрифтам, UX-правилам и правилам стеков;
+- **taste-skill** и **impeccable** — скиллы против шаблонного «AI-вида»: арт-дирекция, типографика, цвет, движение, аудит;
+- **awesome-design-md** — 84 `DESIGN.md` известных брендов как дизайн-системы.
 
 Сверху — **холст в стиле Superdesign**, локальный веб-сервер с живым превью. Каждый дизайн — фрейм. Итерации раскладываются деревом. Правки отправляются Claude прямо из браузера.
 
@@ -20,7 +22,7 @@
 ```
 Claude Code (CLI / IDE / Desktop) ──stdio──► design-hub (MCP)
 claude -p (фоновый, ваша подписка) ──HTTP /mcp + токен──► тот же процесс
-                         ├─ catalog ◄── ~/.design-hub/vendor/{open-design, huashu-design, ui-ux-pro-max}  (git, обновляются)
+                         ├─ catalog ◄── ~/.design-hub/vendor/{open-design, huashu-design, ui-ux-pro-max, taste-skill, impeccable, awesome-design-md}  (git, обновляются)
                          │            ◄── ~/.design-hub/overrides/{systems,templates,skills,rules,references}  (ваше, не затирается)
                          ├─ style engine (UI UX Pro Max, python)
                          ├─ lint/screenshots (установленный Chrome/Edge по DevTools protocol)
@@ -56,7 +58,7 @@ claude -p (фоновый, ваша подписка) ──HTTP /mcp + токе
 - Claude Code склонирует репозиторий и сам поставит npm-зависимости по `package-lock.json`;
 - подключится MCP-сервер `design-hub` (его инструменты называются `mcp__plugin_design-hub_design-hub__*`);
 - появятся скиллы `/design-hub:design`, `/design-hub:canvas`, `/design-hub:update`;
-- при первом запуске сервер распакует в `~/.design-hub/vendor` копию OpenDesign, huashu-design и UI UX Pro Max из самого плагина (`snapshot/`, ~5.6 МБ), каталог работает сразу и без GitHub. В фоне он сверит версии с GitHub и скачает только те источники, у которых вышла новая версия.
+- при первом запуске сервер распакует в `~/.design-hub/vendor` копию всех источников из самого плагина (`snapshot/`, ~7 МБ), каталог работает сразу и без GitHub. В фоне он сверит версии с GitHub и скачает только те источники, у которых вышла новая версия.
 
 **Настройки:** `/plugin configure design-hub@design-hub` или `/config`:
 

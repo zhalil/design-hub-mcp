@@ -17,9 +17,9 @@
       "/NOTICE*",
       "!/design-templates/*/scripts/verify-output/"
     ],
-    "commit": "4f69a426689bbd471c8f0774c13378e651ae7de8",
-    "commitDate": "2026-10-19T14:33:13Z",
-    "subject": "fix(share): recover existing cloud aliases before publication (#8867)"
+    "commit": "26d60298f8129e229a1c10aab4df7ca25b1e9ad3",
+    "commitDate": "2026-10-26T02:57:10Z",
+    "subject": "[OPEND-4220] fix(telemetry): hold first-session stability events until the installation id exists (#8991)"
   },
   "huashu-design": {
     "repo": "https://github.com/alchaincyf/huashu-design.git",
@@ -30,9 +30,9 @@
       "!/assets/showcases/",
       "!/demos/"
     ],
-    "commit": "798c4235ebff03d5c45e3c8affdf5e9d18f9dfa7",
-    "commitDate": "2026-10-17T19:39:33+08:00",
-    "subject": "3.0.0：README 中英文更新到 3.0，补第三轮盲选证据，版本号 3.0.0"
+    "commit": "4fc7bfdbd5ec3fa2d43ce7a6433de60976a5e4b1",
+    "commitDate": "2026-10-23T23:31:58+08:00",
+    "subject": "README：头图换成 3.0 发布片，新增 3.0 案例一节（北斋线上展、鸣迹、今晚吃啥、千里江山图、黑洞、绿拇指、旅居档案）"
   },
   "ui-ux-pro-max": {
     "repo": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill.git",
@@ -42,8 +42,42 @@
       ".claude",
       "/LICENSE*"
     ],
-    "commit": "56ea9cf174ed86786187daa9de0e6247cb0747e4",
-    "commitDate": "2026-10-15T09:04:34+07:00",
-    "subject": "feat(copilot): install as an Agent Skill in .github/skills (#533)"
+    "commit": "28b3b8dee8c976df4fa3e94aed4e092ad43fcb03",
+    "commitDate": "2026-10-26T17:07:27+07:00",
+    "subject": "fix: don't read '3d'/'2fa' after a stack name as a framework version (#548)"
+  },
+  "taste-skill": {
+    "repo": "https://github.com/Leonxlnx/taste-skill.git",
+    "ref": "main",
+    "sparse": [
+      "skills",
+      "/LICENSE*"
+    ],
+    "commit": "12af471f627f866411b4bd785b19646d3672784c",
+    "commitDate": "2026-10-25T01:42:19+02:00",
+    "subject": "tasteskill v2.1.5: community fixes (#172)"
+  },
+  "impeccable": {
+    "repo": "https://github.com/pbakaus/impeccable.git",
+    "ref": "main",
+    "sparse": [
+      "plugin/skills/impeccable",
+      "/LICENSE*",
+      "/NOTICE*"
+    ],
+    "commit": "ade37830fee364c1457f9ada479470296f80dbbb",
+    "commitDate": "2026-10-26T13:17:31-07:00",
+    "subject": "Move the e2e steer marker out of the reserved data-impeccable-* namespace (#1163)"
+  },
+  "awesome-design-md": {
+    "repo": "https://github.com/VoltAgent/awesome-design-md.git",
+    "ref": "main",
+    "sparse": [
+      "/design-md/*/DESIGN.md",
+      "/LICENSE*"
+    ],
+    "commit": "3b605329240ce735b510037cca322f1831fdd7f8",
+    "commitDate": "2026-10-14T08:46:47+03:00",
+    "subject": "Remove AI Design + Build Ecosystem Tools section"
   }
 }
