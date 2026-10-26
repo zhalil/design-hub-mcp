@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { snap, computeLayout, autoLayout, edgeGeometry, sectionBoxes, pushApart } from '../src/preview/static/layout.js';
+import { snap, computeLayout, autoLayout, edgeGeometry, edgePorts, sectionBoxes, pushApart } from '../src/preview/static/layout.js';
 
 const sizeOf = () => ({ w: 1440, h: 900 });
 const node = (id, extra = {}) => ({ id, parent: null, viewport: 'desktop', createdAt: id, ...extra });
@@ -85,14 +85,32 @@ test('autoLayout ignores saved positions', () => {
   assert.equal(pos.a2.y, 0);
 });
 
-test('edgeGeometry picks facing sides', () => {
+test('edgeGeometry runs top to top, arcing above both frames', () => {
   const a = { x: 0, y: 0, w: 100, h: 100 };
   const g = edgeGeometry(a, { x: 500, y: 0, w: 100, h: 100 });
-  assert.ok(g.d.startsWith('M100,50'));
+  assert.ok(g.d.startsWith('M50,0'), 'glued to the top edge');
+  assert.ok(g.d.endsWith('550,0'));
   assert.equal(g.lx, 300);
-  const left = edgeGeometry({ x: 500, y: 0, w: 100, h: 100 }, a);
-  assert.ok(left.d.startsWith('M500,50'));
-  assert.ok(edgeGeometry(a, { x: 2000, y: 300, w: 100, h: 100 }).d.startsWith('M50,100'), 'a lower row: bottom to top, however far aside');
+  assert.ok(g.ly <= -120, 'the label sits well above the frame titles');
+  assert.ok(edgeGeometry(a, { x: 2000, y: 300, w: 100, h: 100 }).d.endsWith('2050,300'), 'a lower row is entered from the top too');
+});
+
+test('an iteration a link points to branches below its page; a plain one stays to the right', () => {
+  const nodes = [node('b'), node('files', { parent: 'b' }), node('settings', { parent: 'b' }), node('copy', { parent: 'b' })];
+  const pos = computeLayout(nodes, [nav('b', 'files'), nav('b', 'settings')], sizeOf);
+  assert.equal(pos.copy.y, pos.b.y, 'the copy is a version: same row');
+  assert.ok(pos.copy.x > pos.b.x);
+  assert.ok(pos.files.y > pos.b.y && pos.settings.y === pos.files.y, 'linked pages: one level down, side by side');
+  assert.ok(pos.files.x < pos.settings.x);
+});
+
+test('edgePorts spreads the links leaving one side of a frame, ordered by their targets', () => {
+  const box = (x, y) => ({ x, y, w: 100, h: 100 });
+  const positions = { a: box(0, 0), l: box(-300, 400), r: box(300, 400) };
+  const ends = edgePorts([{ id: 'ar', from: 'a', to: 'r' }, { id: 'al', from: 'a', to: 'l' }], positions);
+  assert.ok(ends.get('al').a.x < ends.get('ar').a.x, 'the left target leaves from further left');
+  assert.equal(ends.get('al').b.x, -225, 'a lone link meets the top edge at 3/4, clear of the title');
+  assert.ok(edgeGeometry(ends.get('al').a, ends.get('al').b).d.startsWith(`M${ends.get('al').a.x},100`), 'down a row: out of the bottom');
 });
 
 test('pushApart moves what is in the way, and what that bumps into, keeping the fixed box put', () => {

@@ -1,5 +1,5 @@
 // Design Hub canvas: infinite pan/zoom mat with live design frames laid out as iteration trees.
-import { autoLayout, computeLayout, edgeGeometry, pushApart, sectionBoxes, snap } from './layout.js';
+import { autoLayout, computeLayout, edgeGeometry, edgePorts, pushApart, sectionBoxes, snap } from './layout.js';
 import { createHistory } from './history.js';
 import { createMinimap } from './minimap.js';
 
@@ -32,6 +32,7 @@ import { createMinimap } from './minimap.js';
   let edgeSel = null;           // selected nav edge id (never together with a frame/note selection)
   let linkDrag = null;          // { from, x, y } while dragging a link handle, in world coords
   let editingEdge = null;       // edge id whose label is being edited inline
+  let edgeEnds = new Map();     // edge id -> { a, b }: where each drawn nav link meets its frames
   let dragging = null;          // Map id -> pos while frames/notes are dragged: refresh() must not snap them back
   let band = null;              // { x, y, base, el } while a selection rectangle is dragged on empty mat
   const noteEls = new Map();    // noteId -> element
@@ -267,24 +268,26 @@ import { createMinimap } from './minimap.js';
   const esc = (t) => String(t).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
   function drawLinks(nodes) {
     const s = view.s;
-    const parts = [`<defs><marker id="arrow" markerUnits="userSpaceOnUse" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="${12 / s}" markerHeight="${12 / s}" orient="auto"><path d="M0,0L10,5L0,10z"/></marker></defs>`];
+    const parts = [`<defs><marker id="arrow" markerUnits="userSpaceOnUse" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="${Math.min(12 / s, 40)}" markerHeight="${Math.min(12 / s, 40)}" orient="auto"><path d="M0,0L10,5L0,10z"/></marker></defs>`];
     for (const b of sectionBoxes(nodes, positions, 120)) { // the frame labels above the top row stay inside
       const top = 40 / s;
       parts.push(`<rect class="section" x="${b.x}" y="${b.y - top}" width="${b.w}" height="${b.h + top}" rx="${12 / s}"/><text class="section" x="${b.x}" y="${b.y - top - 10 / s}" font-size="${15 / s}">${esc(b.section)}</text>`);
     }
+    const nav = linksFilter === 'none' ? [] : (project?.edges || []).filter((e) => e.kind === 'nav' && positions[e.from] && positions[e.to]);
     if (linksFilter === 'all') {
       for (const n of nodes) {
         if (!n.parent || !positions[n.parent] || !positions[n.id]) continue;
+        if (nav.some((e) => (e.from === n.parent && e.to === n.id) || (e.from === n.id && e.to === n.parent))) continue; // the nav link says it
         const a = positions[n.parent]; const b = positions[n.id];
-        const x1 = a.x + a.w / 2; const y1 = a.y + a.h; const x2 = b.x + b.w / 2; const y2 = b.y - 40 / s;
+        const x1 = a.x + a.w / 2; const y1 = a.y + a.h; const x2 = b.x + b.w / 2; const y2 = b.y;
         const my = (y1 + y2) / 2;
         parts.push(`<path class="lineage" d="M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}"/><circle cx="${x1}" cy="${y1}" r="${4 / s}"/><circle cx="${x2}" cy="${y2}" r="${4 / s}"/>`);
       }
     }
     const pills = [];
-    const nav = linksFilter === 'none' ? [] : (project?.edges || []).filter((e) => e.kind === 'nav' && positions[e.from] && positions[e.to]);
+    edgeEnds = edgePorts(nav, positions);
     for (const e of nav) {
-      const g = edgeGeometry(positions[e.from], positions[e.to]);
+      const g = edgeGeometry(edgeEnds.get(e.id).a, edgeEnds.get(e.id).b);
       parts.push(`<path class="nav${e.id === edgeSel ? ' selected' : ''}" data-id="${e.id}" d="${g.d}" marker-end="url(#arrow)"/><path class="edge-hit" data-id="${e.id}" d="${g.d}"/>`);
       if (e.label) pills.push({ e, g });
     }
@@ -865,10 +868,10 @@ import { createMinimap } from './minimap.js';
 
   function editEdgeLabel(id) {
     const e = project.edges.find((x) => x.id === id);
-    if (!e || !positions[e.from] || !positions[e.to] || !canEdit()) return;
+    if (!e || !edgeEnds.has(id) || !canEdit()) return;
     selectEdge(id);
     const { from, to, label: old } = e;
-    const g = edgeGeometry(positions[from], positions[to]);
+    const g = edgeGeometry(edgeEnds.get(id).a, edgeEnds.get(id).b);
     const input = document.createElement('input');
     input.className = 'edge-label';
     input.value = old;

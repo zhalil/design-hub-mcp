@@ -6,22 +6,25 @@ export const snap = (v) => Math.round(v / GRID) * GRID;
 const rootOf = (byId, n) => { const seen = new Set(); while (n.parent && byId.has(n.parent) && !seen.has(n.id)) { seen.add(n.id); n = byId.get(n.parent); } return n; };
 
 // The flow runs top to bottom and branches: a page sits centered above the pages it links to,
-// which stand side by side. A page and its iterations share one row, iterations to its right.
+// which stand side by side. A page and its iterations share one row, iterations to its right;
+// an iteration a link points to is a page of its own and gets its own row under the linking page.
 // A section (User, Orders…) is laid out as its own flow and then stands in the main flow as one
 // framed block, under the page that links into it (or under another section if only that one does).
 // Frames with a saved pos stay put (unless ignorePos); what follows them is placed relative to them.
 export function computeLayout(nodes, edges, sizeOf, { gapX = 140, gapY = 220, ignorePos = false } = {}) {
   const byId = new Map(nodes.map((n) => [n.id, n]));
+  const navTo = new Set((edges || []).filter((e) => e.kind === 'nav' && byId.has(e.from)).map((e) => e.to));
+  const rowOf = (n) => { const seen = new Set(); while (n.parent && byId.has(n.parent) && !navTo.has(n.id) && !seen.has(n.id)) { seen.add(n.id); n = byId.get(n.parent); } return n; };
   const rows = new Map();
-  for (const n of nodes) { const r = rootOf(byId, n).id; if (!rows.has(r)) rows.set(r, []); rows.get(r)[n.id === r ? 'unshift' : 'push'](n); }
+  for (const n of nodes) { const r = rowOf(n).id; if (!rows.has(r)) rows.set(r, []); rows.get(r)[n.id === r ? 'unshift' : 'push'](n); }
   const blocks = new Map(); // '§User' -> the User section's flow, with room around it for its frame and title
   const rowW = (r) => (blocks.has(r) ? blocks.get(r).w + 2 * gapX : rows.get(r).reduce((s, n) => s + sizeOf(n).w, 0) + (rows.get(r).length - 1) * gapX);
   const rowH = (r) => (blocks.has(r) ? blocks.get(r).h + 3 * gapY : Math.max(...rows.get(r).map((n) => sizeOf(n).h)));
-  const sectionOf = (r) => rows.get(r)[0].section || '';
+  const sectionOf = (r) => rootOf(byId, byId.get(r)).section || '';
   const links = [];
   for (const e of edges || []) {
     if (e.kind !== 'nav' || !byId.has(e.from) || !byId.has(e.to)) continue;
-    const a = rootOf(byId, byId.get(e.from)).id; const b = rootOf(byId, byId.get(e.to)).id;
+    const a = rowOf(byId.get(e.from)).id; const b = rowOf(byId.get(e.to)).id;
     if (a !== b) links.push([a, b]);
   }
   const created = (r) => byId.get(blocks.get(r)?.first ?? r).createdAt;
@@ -138,24 +141,50 @@ export function autoLayout(nodes, edges, sizeOf) {
   return Object.fromEntries(Object.entries(pos).map(([id, p]) => [id, { x: snap(p.x), y: snap(p.y) }]));
 }
 
-// Cubic Bezier from the side of `a` facing `b` to the facing side of `b`: left/right within a row, top/bottom between rows.
+// Cubic Bezier in world coordinates, so a link stays glued to its frames while zooming.
+// To a lower row: out of the bottom of `a`, into the top of `b`. Otherwise top to top, arcing above both,
+// high enough for its pill to clear the frame titles. `a`/`b` may be zero-width ports on a frame's edge.
+// The pill (lx, ly) sits at the top of an arc, or near the source of a downward link: clear of the titles below.
 export function edgeGeometry(a, b) {
-  const dx = b.x + b.w / 2 - (a.x + a.w / 2);
-  const dy = b.y + b.h / 2 - (a.y + a.h / 2);
-  let p0; let p3; let c1; let c2;
-  if (b.y < a.y + a.h && a.y < b.y + b.h) {
-    const right = dx >= 0;
-    p0 = [right ? a.x + a.w : a.x, a.y + a.h / 2];
-    p3 = [right ? b.x : b.x + b.w, b.y + b.h / 2];
-    const k = Math.max(40, Math.abs(p3[0] - p0[0]) / 2) * (right ? 1 : -1);
-    c1 = [p0[0] + k, p0[1]]; c2 = [p3[0] - k, p3[1]];
-  } else {
-    const down = dy >= 0;
-    p0 = [a.x + a.w / 2, down ? a.y + a.h : a.y];
-    p3 = [b.x + b.w / 2, down ? b.y : b.y + b.h];
-    const k = Math.max(40, Math.abs(p3[1] - p0[1]) / 2) * (down ? 1 : -1);
+  let p0; let c1; let c2; let p3; let t = 0.5;
+  if (b.y >= a.y + a.h) {
+    t = 0.3;
+    p0 = [a.x + a.w / 2, a.y + a.h]; p3 = [b.x + b.w / 2, b.y];
+    const k = Math.max(80, (p3[1] - p0[1]) / 2);
     c1 = [p0[0], p0[1] + k]; c2 = [p3[0], p3[1] - k];
+  } else {
+    p0 = [a.x + a.w / 2, a.y]; p3 = [b.x + b.w / 2, b.y];
+    const top = Math.min(p0[1], p3[1]) - Math.max(160, Math.abs(p3[0] - p0[0]) / 4);
+    c1 = [p0[0], top]; c2 = [p3[0], top];
   }
-  const mid = (i) => (p0[i] + 3 * c1[i] + 3 * c2[i] + p3[i]) / 8;
-  return { d: `M${p0} C${c1} ${c2} ${p3}`, lx: mid(0), ly: mid(1) };
+  const at = (i) => (1 - t) ** 3 * p0[i] + 3 * (1 - t) ** 2 * t * c1[i] + 3 * (1 - t) * t ** 2 * c2[i] + t ** 3 * p3[i];
+  return { d: `M${p0} C${c1} ${c2} ${p3}`, lx: at(0), ly: at(1) };
+}
+
+/** Spreads the links meeting one side of a frame along it, ordered by where their other end is, so they never
+ *  share a point. Returns edge id -> { a, b }: the zero-width boxes edgeGeometry draws between. */
+export function edgePorts(edges, positions) {
+  const sides = new Map(); // 'n3:top' -> [{ e, end, other }]
+  const ends = new Map();
+  for (const e of edges) {
+    const a = positions[e.from]; const b = positions[e.to];
+    const down = b.y >= a.y + a.h;
+    ends.set(e.id, { a: { ...a }, b: { ...b } });
+    for (const [end, id, side, other] of [['a', e.from, down ? 'bottom' : 'top', b], ['b', e.to, 'top', a]]) {
+      const k = `${id}:${side}`;
+      if (!sides.has(k)) sides.set(k, []);
+      sides.get(k).push({ e, end, ox: other.x + other.w / 2, side });
+    }
+  }
+  for (const [k, list] of sides) {
+    const box = positions[k.slice(0, k.lastIndexOf(':'))];
+    list.sort((p, q) => p.ox - q.ox);
+    // the frame title takes the left 70% of the top edge
+    const [lo, hi] = list[0].side === 'top' ? [0.75, 0.95] : [0.1, 0.9];
+    list.forEach((p, i) => {
+      const t = list.length === 1 ? (list[0].side === 'top' ? lo : 0.5) : lo + ((hi - lo) * i) / (list.length - 1);
+      Object.assign(ends.get(p.e.id)[p.end], { x: box.x + box.w * t, w: 0 });
+    });
+  }
+  return ends;
 }
