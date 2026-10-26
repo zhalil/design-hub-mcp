@@ -1,6 +1,6 @@
 {
   "name": "design-hub-mcp",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "One MCP server for OpenDesign, huashu-design and UI UX Pro Max with a Superdesign-style live canvas preview",
   "main": "src/server.js",
   "scripts": {
