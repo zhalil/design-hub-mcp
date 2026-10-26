@@ -130,6 +130,24 @@ try {
   await drag(...await label(), 100, 0);
   assert.equal(await left(), l1, 'view mode: a label drag does not move the frame');
 
+  // ---- Edit mode: a frame is dragged by its body too, and the frames in its way step aside
+  {
+    await page.click('#mode [data-mode="edit"]');
+    const rects = () => page.$$eval('.frame', (els) => els.map((el) => ({ id: el.dataset.id, ...Object.fromEntries(['left', 'top', 'width', 'height'].map((k) => [k, parseFloat(el.style[k])])) })));
+    const before = await rects();
+    const [ra, rc] = [a.id, c.id].map((id) => before.find((r) => r.id === id));
+    const body = await page.locator(`.frame[data-id="${a.id}"] .shield`).boundingBox();
+    await drag(body.x + 20, body.y + 20, (rc.left - ra.left) * await scale(), 0);
+    const after = await rects();
+    assert.notEqual(after.find((r) => r.id === a.id).left, ra.left, 'a body drag moves the frame');
+    for (const p of after) for (const q of after) {
+      if (p.id < q.id) assert.ok(p.left + p.width <= q.left || q.left + q.width <= p.left || p.top + p.height <= q.top || q.top + q.height <= p.top, `${p.id} and ${q.id} do not overlap after the drag`);
+    }
+    await page.keyboard.press('Control+z');
+    await page.waitForTimeout(600);
+    assert.deepEqual(await rects(), before, 'Ctrl+Z puts the dragged and the pushed frames back');
+    await page.click('#mode [data-mode="view"]');
+  }
   assert.deepEqual(errors, [], 'no script errors on the page');
   // ---- frame toolbar stays clickable with the Agent panel open (not under it or the minimap)
   await page.click('#mode [data-mode="edit"]');

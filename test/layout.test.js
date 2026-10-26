@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { snap, computeLayout, autoLayout, edgeGeometry, sectionBoxes } from '../src/preview/static/layout.js';
+import { snap, computeLayout, autoLayout, edgeGeometry, sectionBoxes, pushApart } from '../src/preview/static/layout.js';
 
 const sizeOf = () => ({ w: 1440, h: 900 });
 const node = (id, extra = {}) => ({ id, parent: null, viewport: 'desktop', createdAt: id, ...extra });
@@ -93,4 +93,19 @@ test('edgeGeometry picks facing sides', () => {
   const left = edgeGeometry({ x: 500, y: 0, w: 100, h: 100 }, a);
   assert.ok(left.d.startsWith('M500,50'));
   assert.ok(edgeGeometry(a, { x: 2000, y: 300, w: 100, h: 100 }).d.startsWith('M50,100'), 'a lower row: bottom to top, however far aside');
+});
+
+test('pushApart moves what is in the way, and what that bumps into, keeping the fixed box put', () => {
+  const box = (x, y) => ({ x, y, w: 100, h: 100 });
+  const moved = pushApart({ a: box(0, 0), b: box(60, 10), c: box(200, 0), far: box(0, 900) }, ['a'], 20);
+  assert.deepEqual(moved.b, { x: 120, y: 10 }, 'b goes right, the shorter way out, leaving the gap');
+  assert.deepEqual(moved.c, { x: 240, y: 0 }, 'c is pushed on by b');
+  assert.equal(moved.a, undefined);
+  assert.equal(moved.far, undefined);
+});
+
+test('an auto-placed page steps aside from a moved one lying on it', () => {
+  const pos = computeLayout([node('a'), node('b', { pos: { x: 200, y: 100 } })], [], sizeOf);
+  assert.deepEqual([pos.b.x, pos.b.y], [200, 100]);
+  assert.ok(pos.a.y + 900 + 48 <= 100 || pos.a.x + 1440 + 48 <= 200 || pos.a.x >= 200 + 1440 + 48 || pos.a.y >= 100 + 900 + 48);
 });

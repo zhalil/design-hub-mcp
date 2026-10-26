@@ -94,7 +94,29 @@ export function computeLayout(nodes, edges, sizeOf, { gapX = 140, gapY = 220, ig
     if (x && y && x !== y && !entered.has(`§${y}`)) main.push([`§${x}`, `§${y}`]);
   }
   flow([...groups.get(''), ...blocks.keys()].sort(byCreated), main).place(0, 0);
+  // A moved frame never lies on an auto-placed one: those step aside.
+  if (!ignorePos) for (const [id, p] of Object.entries(pushApart(pos, nodes.filter((n) => n.pos).map((n) => n.id)))) Object.assign(pos[id], p);
   return pos;
+}
+
+/** Moves boxes out of the way of the `fixed` ones, and whatever those bump into in turn, by the shorter way out. */
+export function pushApart(rects, fixed, gap = 48) {
+  const r = Object.fromEntries(Object.entries(rects).map(([id, b]) => [id, { ...b }]));
+  const queue = fixed.filter((id) => r[id]);
+  const pushed = new Set();
+  for (let i = 0; i < queue.length && i < 500; i++) { // ponytail: capped, boxes pushed from opposite sides at once may still touch
+    const a = r[queue[i]];
+    for (const [id, b] of Object.entries(r)) {
+      if (id === queue[i] || fixed.includes(id)) continue;
+      const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x) + gap;
+      const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) + gap;
+      if (ox <= 0 || oy <= 0) continue;
+      if (ox < oy) b.x += (b.x + b.w / 2 >= a.x + a.w / 2 ? ox : -ox);
+      else b.y += (b.y + b.h / 2 >= a.y + a.h / 2 ? oy : -oy);
+      pushed.add(id); queue.push(id);
+    }
+  }
+  return Object.fromEntries([...pushed].map((id) => [id, { x: r[id].x, y: r[id].y }]));
 }
 
 /** The box around each section's frames, for its outline and title on the canvas. */

@@ -1,5 +1,5 @@
 // Design Hub canvas: infinite pan/zoom mat with live design frames laid out as iteration trees.
-import { autoLayout, computeLayout, edgeGeometry, sectionBoxes, snap } from './layout.js';
+import { autoLayout, computeLayout, edgeGeometry, pushApart, sectionBoxes, snap } from './layout.js';
 import { createHistory } from './history.js';
 import { createMinimap } from './minimap.js';
 
@@ -313,8 +313,7 @@ import { createMinimap } from './minimap.js';
     const shield = el.querySelector('.shield');
     shield.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 || space || tool !== 'select') return;
-      if (e.shiftKey) { e.stopPropagation(); toggleSelect(n.id); return; }
-      select(n.id); startPan(e);
+      startDrag(e, n.id);
     });
     shield.addEventListener('dblclick', () => setInteract(n.id));
     el.querySelector('.frame-label').addEventListener('pointerdown', (e) => startDrag(e, n.id));
@@ -496,9 +495,10 @@ import { createMinimap } from './minimap.js';
     const inSelection = selection.has(id);
     if (!inSelection) select(id);
     if (mode !== 'edit') { startPan(e); return; }
+    const item = (x) => project.nodes.find((n) => n.id === x) || note(x);
     const from = new Map([...selection].filter(rectOf).map((x) => [x, { x: rectOf(x).x, y: rectOf(x).y }]));
-    const isFrame = new Map([...from.keys()].map((x) => [x, Boolean(positions[x])]));
-    const placed = new Set([...from.keys()].filter((x) => (project.nodes.find((n) => n.id === x) || note(x))?.pos)); // undo puts the rest back to auto-placed
+    const placed = new Set([...from.keys()].filter((x) => item(x)?.pos)); // undo puts the rest back to auto-placed
+    const orig = new Map(); // pushed aside: id -> its pos before the drag (null: auto-placed)
     const start = { x: e.clientX, y: e.clientY };
     const drag = new Map();
     dragging = drag;
@@ -510,22 +510,31 @@ import { createMinimap } from './minimap.js';
       for (const [x, p] of from) {
         const pos = { x: p.x + sx, y: p.y + sy };
         drag.set(x, pos);
-        const it = project.nodes.find((n) => n.id === x) || note(x);
+        const it = item(x);
         if (it) it.pos = pos;
+      }
+      // Whatever lies in the way steps aside, and springs back once the drag moves on.
+      for (const [x, p] of orig) { drag.delete(x); const it = item(x); if (it) it.pos = p; }
+      const rects = { ...computeLayout(project.nodes, project.edges, sizeOf, { gapX: GAP_X, gapY: GAP_Y }), ...Object.fromEntries(project.notes.map((t) => [t.id, noteRect(t)])) };
+      for (const [x, pos] of Object.entries(pushApart(rects, [...from.keys()]))) {
+        const it = item(x);
+        if (!it) continue;
+        if (!orig.has(x)) orig.set(x, it.pos || null);
+        drag.set(x, pos); it.pos = pos;
       }
       layoutAndRender();
     };
     const up = (ev) => {
       removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
       const done = () => { if (dragging === drag) dragging = null; };
-      const to = [...drag].map(([x, pos]) => ({ id: x, frame: isFrame.get(x), pos }));
+      const to = [...drag].map(([x, pos]) => ({ id: x, frame: Boolean(positions[x]), pos }));
       if (ev.type === 'pointercancel' || !to.length || (to[0].pos.x === from.get(to[0].id).x && to[0].pos.y === from.get(to[0].id).y)) {
         done();
         if (to.length) refresh(); // no PATCH: put everything back where the server has it
         else if (inSelection && ev.type !== 'pointercancel') select(id); // a click inside a multi-selection narrows it
         return;
       }
-      const back = to.map((m) => ({ ...m, pos: placed.has(m.id) ? from.get(m.id) : null }));
+      const back = to.map((m) => ({ ...m, pos: orig.has(m.id) ? orig.get(m.id) : placed.has(m.id) ? from.get(m.id) : null }));
       const label = to.length > 1 ? `Move ${to.length} items` : to[0].frame ? 'Move design' : 'Move note';
       moveAll(to, back, label, done);
     };
