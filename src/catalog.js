@@ -125,11 +125,13 @@ function scanRoot(kind, source, root) {
 
 function build() {
   const all = [];
+  const dropDuplicates = new Set();
   // local overrides first: they win over upstream items with the same name
   for (const kind of KINDS) {
     for (const it of scanRoot(kind, 'local', path.join(config.overridesDir, kind))) all.push(it);
   }
   for (const src of enabledSources()) {
+    if (src.dropDuplicates) dropDuplicates.add(src.id);
     const base = sourceDir(src.id);
     if (!fs.existsSync(base)) continue;
     for (const [kind, roots] of Object.entries(src.provides || {})) {
@@ -142,11 +144,12 @@ function build() {
   const seen = new Set();
   for (const it of all) {
     it.id = `${it.source}/${it.name}`;
-    const key = `${it.kind}:${it.name}`;
+    // "linear.app" and "linear-app" are the same brand
+    const key = `${it.kind}:${it.name.replace(/\./g, '-')}`;
     it.shadowed = seen.has(key);
     seen.add(key);
   }
-  return { builtAt: Date.now(), items: all };
+  return { builtAt: Date.now(), items: all.filter((it) => !(it.shadowed && dropDuplicates.has(it.source))) };
 }
 
 export function catalog() {

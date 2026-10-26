@@ -4,7 +4,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-process.env.DESIGN_HUB_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'dh-home-'));
+const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dh-home-'));
+process.env.DESIGN_HUB_HOME = home;
+process.env.DESIGN_HUB_SOURCES = path.join(home, 'sources.json');
+fs.writeFileSync(process.env.DESIGN_HUB_SOURCES, JSON.stringify({ sources: [
+  { id: 'rich', repo: 'x', provides: { systems: ['s'] } },
+  { id: 'brands', repo: 'y', dropDuplicates: true, provides: { systems: ['s'] } },
+] }));
+for (const [src, name] of [['rich', 'linear-app'], ['brands', 'linear.app'], ['brands', 'oura']]) {
+  fs.mkdirSync(path.join(home, 'vendor', src, 's', name), { recursive: true });
+  fs.writeFileSync(path.join(home, 'vendor', src, 's', name, 'DESIGN.md'), `# ${name}\n`);
+}
 const { config } = await import('../src/config.js');
 const { catalog } = await import('../src/catalog.js');
 
@@ -15,4 +25,10 @@ test('a DESIGN.md with a YAML front matter gets its title and description from i
   const it = catalog().items.find((i) => i.id === 'local/acme');
   assert.equal(it.title, 'Design System Inspired by Acme');
   assert.equal(it.description, 'Warm cream canvas, coral CTAs.');
+});
+
+test('a source with dropDuplicates loses the brands an earlier source already has', () => {
+  const ids = catalog().items.filter((i) => i.kind === 'systems').map((i) => i.id);
+  assert.ok(ids.includes('rich/linear-app') && ids.includes('brands/oura'));
+  assert.ok(!ids.includes('brands/linear.app'));
 });

@@ -75,6 +75,8 @@
       "ref": "main",
       "enabled": true,
       "license": "MIT",
+      "$dropDuplicates": "most of its brands are also in OpenDesign, with tokens and components; those copies are left out",
+      "dropDuplicates": true,
       "sparse": ["/design-md/*/DESIGN.md", "/LICENSE*"],
       "provides": {
         "systems": ["design-md"]
