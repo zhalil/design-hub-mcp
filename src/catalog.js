@@ -48,15 +48,19 @@ function listDirs(dir) {
 function systemItem(source, dir, name) {
   const designFile = path.join(dir, 'DESIGN.md');
   if (!fs.existsSync(designFile)) return null;
-  const head = safeRead(designFile, 4000) || '';
-  const title = (head.match(/^#\s+(.+)$/m)?.[1] || name).trim();
+  // Google Stitch-style DESIGN.md (awesome-design-md) keeps name, description and tokens in a YAML front matter
+  const { data, body } = parseFrontmatter(safeRead(designFile) || '');
+  const head = body.slice(0, 4000);
+  const brand = String(data.name || '').replace(/[-\s]*(inspired[-\s]*)?(design[-\s]*)?analysis$|\s+inspired$/i, '').replace(/-/g, ' ').trim();
+  const title = (head.match(/^#\s+(.+)$/m)?.[1] || (brand && `Design System Inspired by ${brand}`) || name).trim();
   const category = head.match(/^>\s*Category:\s*(.+)$/m)?.[1]?.trim() || '';
   const quoteLines = [...head.matchAll(/^>\s*(.+)$/gm)].map((m) => m[1]).filter((l) => !/^Category:/i.test(l));
+  const firstPara = head.replace(/^#.*$/gm, '').split(/\n\s*\n/).map((p) => p.trim()).find((p) => p && !p.startsWith('>') && !p.startsWith('|')) || '';
   const manifest = (() => { try { return JSON.parse(safeRead(path.join(dir, 'manifest.json')) || 'null'); } catch { return null; } })();
   const languages = fs.readdirSync(dir).map((f) => f.match(/^DESIGN-([a-z-]+)\.md$/i)?.[1]).filter(Boolean);
   return {
     kind: 'systems', source, name, dir, title, category,
-    description: oneLine(quoteLines[0] || manifest?.description || ''),
+    description: oneLine(data.description || quoteLines[0] || manifest?.description || firstPara),
     files: ['DESIGN.md', 'tokens.css', 'tailwind-v4.css', 'design-tokens.json', 'USAGE.md', 'components.html']
       .filter((f) => fs.existsSync(path.join(dir, f))),
     languages,
